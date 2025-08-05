@@ -10,7 +10,6 @@
 #include <array>
 #include <cmath>
 #include <utility>
-#include <iostream>
 #include <stdexcept>
 
 using namespace std;
@@ -22,34 +21,9 @@ class CartesianFrenetConverter {
     public:
         CartesianFrenetConverter();
         ~CartesianFrenetConverter();
-
-        static pair<array<double, 3>, array<double, 3>> cartesian_to_frenet(
-            double rs, 
-            double rx, 
-            double ry, 
-            double rtheta,
-            double rkappa, 
-            double rdkappa,
-            double x, 
-            double y, 
-            double v, 
-            double a,
-            double theta, 
-            double kappa
-        );
-
-        static array<double, 6> frenet_to_cartesian(
-            double rs, 
-            double rx, 
-            double ry, 
-            double rtheta,
-            double rkappa, 
-            double rdkappa,
-            array<double, 3> s_condition,
-            array<double, 3> d_condition
-        );
-
-        static double normalize_angle(double angle);
+        static pair<array<double, 3>, array<double, 3>> cartesian_to_frenet(double, double, double, double, double, double, double, double, double, double, double, double);
+        static array<double, 6> frenet_to_cartesian(double, double, double, double, double, double, array<double, 3>, array<double, 3>);
+        static double normalize_angle(double);
 };
 
 #endif
