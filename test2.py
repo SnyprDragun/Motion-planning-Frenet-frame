@@ -1,137 +1,5 @@
 #!/Users/subhodeep/venv/bin/python
 
-# import numpy as np
-# import matplotlib.pyplot as plt
-# from matplotlib import animation
-# from scipy.optimize import minimize
-
-# # Parameters
-# L = 1.5
-# D = 2.0
-# v = 1.0
-# dt = 0.1
-# N = 10  # MPC horizon
-
-# # Reference path: circle of radius 10
-# def ref_path(t):
-#     R = 10.0
-#     omega = v / R
-#     x = R * np.cos(omega * t)
-#     y = R * np.sin(omega * t)
-#     theta = np.arctan2(y, x) + np.pi / 2
-#     return x, y, theta
-
-# # Dynamics
-# def step(x, u):
-#     x_, y_, theta_, phi_ = x
-#     omega = u
-
-#     dx = v * np.cos(theta_)
-#     dy = v * np.sin(theta_)
-#     dtheta = omega
-#     v_t = v * np.cos(theta_ - phi_) + L * omega * np.sin(theta_ - phi_)
-#     dphi = (v * np.sin(theta_ - phi_) - L * omega * np.cos(theta_ - phi_)) / D
-
-#     return np.array([x_ + dx * dt, y_ + dy * dt, theta_ + dtheta * dt, phi_ + dphi * dt])
-
-# # MPC cost function
-# def mpc_cost(omega_seq, state0, t0):
-#     state = np.array(state0)
-#     cost = 0
-#     for i in range(N):
-#         omega = omega_seq[i]
-#         state = step(state, omega)
-#         x_ref, y_ref, _ = ref_path(t0 + (i+1)*dt)
-#         cost += (state[0] - x_ref)**2 + (state[1] - y_ref)**2
-#     return cost
-
-# # Control using MPC
-# def get_mpc_control(state, t0):
-#     init_guess = np.zeros(N)
-#     bounds = [(-1.5, 1.5)] * N  # omega bounds
-#     res = minimize(mpc_cost, init_guess, args=(state, t0), bounds=bounds, method='SLSQP')
-#     return res.x[0] if res.success else 0.0
-
-# # Compute hitch and trailer positions
-# def compute_hitch_trailer(state):
-#     x, y, theta, phi = state
-#     x_h = x - L * np.cos(theta)
-#     y_h = y - L * np.sin(theta)
-#     x_t = x_h - D * np.cos(phi)
-#     y_t = y_h - D * np.sin(phi)
-#     return (x_h, y_h), (x_t, y_t)
-
-# # ---- Simulation ----
-# T = 100
-# steps = int(T / dt)
-# states = []
-# hitches = []
-# trailers = []
-# state = [10, 0, np.pi/2, np.pi/2]  # Start on circle
-# times = []
-
-# for i in range(steps):
-#     t = i * dt
-#     omega = get_mpc_control(state, t)
-#     state = step(state, omega)
-#     states.append(state)
-#     hitch, trailer = compute_hitch_trailer(state)
-#     hitches.append(hitch)
-#     trailers.append(trailer)
-#     times.append(t)
-
-# states = np.array(states)
-# hitches = np.array(hitches)
-# trailers = np.array(trailers)
-
-# # ---- Animation ----
-# fig, ax = plt.subplots()
-# ax.set_aspect('equal')
-# ax.set_xlim(-12, 12)
-# ax.set_ylim(-12, 12)
-
-# line_path, = ax.plot([], [], 'b--', label='Reference Path')
-# line_traj, = ax.plot([], [], 'r-', label='Mule Path')
-# mule_point, = ax.plot([], [], 'ro', label='Mule')
-# hitch_point, = ax.plot([], [], 'yo', label='Hitch')
-# trailer_point, = ax.plot([], [], 'ko', label='Trailer')
-# link1, = ax.plot([], [], 'r-', lw=1.5)
-# link2, = ax.plot([], [], 'k-', lw=1.5)
-
-# circle = plt.Circle((0, 0), 10, color='gray', fill=False, linestyle='--')
-# ax.add_patch(circle)
-# ax.legend()
-
-# def init():
-#     line_path.set_data([], [])
-#     line_traj.set_data([], [])
-#     mule_point.set_data([], [])
-#     hitch_point.set_data([], [])
-#     trailer_point.set_data([], [])
-#     link1.set_data([], [])
-#     link2.set_data([], [])
-#     return line_path, line_traj, mule_point, hitch_point, trailer_point, link1, link2
-
-# def update(i):
-#     mule = states[i, :2]
-#     hitch = hitches[i]
-#     trailer = trailers[i]
-
-#     # Mule trajectory so far
-#     line_traj.set_data(states[:i+1, 0], states[:i+1, 1])
-#     mule_point.set_data([mule[0]], [mule[1]])
-#     hitch_point.set_data([hitch[0]], [hitch[1]])
-#     trailer_point.set_data([trailer[0]], [trailer[1]])
-#     link1.set_data([mule[0], hitch[0]], [mule[1], hitch[1]])
-#     link2.set_data([hitch[0], trailer[0]], [hitch[1], trailer[1]])
-#     return line_traj, mule_point, hitch_point, trailer_point, link1, link2
-
-# ani = animation.FuncAnimation(fig, update, frames=steps, init_func=init, interval=50, blit=True)
-# plt.title("MPC Tracking a Circle with Hitch & Trailer")
-# plt.show()
-
-
-
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -142,31 +10,133 @@ import math
 #  Class: CartesianFrenetConverter
 # ===================================
 class CartesianFrenetConverter:
-    """Convert states between Cartesian and Frenet coordinate systems"""
+    """
+    A class for converting states between Cartesian and Frenet coordinate systems
+    """
 
-    @staticmethod
+    @ staticmethod
     def cartesian_to_frenet(rs, rx, ry, rtheta, rkappa, rdkappa, x, y, v, a, theta, kappa):
+        """
+        Convert state from Cartesian coordinate to Frenet coordinate
+
+        Parameters
+        ----------
+            rs: reference line s-coordinate
+            rx, ry: reference point coordinates
+            rtheta: reference point heading
+            rkappa: reference point curvature
+            rdkappa: reference point curvature rate
+            x, y: current position
+            v: velocity
+            a: acceleration
+            theta: heading angle
+            kappa: curvature
+
+        Returns
+        -------
+            s_condition: [s(t), s'(t), s''(t)]
+            d_condition: [d(s), d'(s), d''(s)]
+        """
         dx = x - rx
         dy = y - ry
-        cos_r = math.cos(rtheta)
-        sin_r = math.sin(rtheta)
-        cross = cos_r * dy - sin_r * dx
-        d = math.copysign(math.hypot(dx, dy), cross)
+
+        cos_theta_r = math.cos(rtheta)
+        sin_theta_r = math.sin(rtheta)
+
+        cross_rd_nd = cos_theta_r * dy - sin_theta_r * dx
+        d = math.copysign(math.hypot(dx, dy), cross_rd_nd)
+
         delta_theta = theta - rtheta
-        tan_delta = math.tan(delta_theta)
-        cos_delta = math.cos(delta_theta)
-        one_minus_kr_d = 1 - rkappa * d
-        d_dot = one_minus_kr_d * tan_delta
+        tan_delta_theta = math.tan(delta_theta)
+        cos_delta_theta = math.cos(delta_theta)
+
+        one_minus_kappa_r_d = 1 - rkappa * d
+        d_dot = one_minus_kappa_r_d * tan_delta_theta
+
         kappa_r_d_prime = rdkappa * d + rkappa * d_dot
-        d_ddot = (-kappa_r_d_prime * tan_delta +
-                  one_minus_kr_d / (cos_delta * cos_delta) *
-                  (kappa * one_minus_kr_d / cos_delta - rkappa))
+
+        d_ddot = (-kappa_r_d_prime * tan_delta_theta +
+                  one_minus_kappa_r_d / (cos_delta_theta * cos_delta_theta) *
+                  (kappa * one_minus_kappa_r_d / cos_delta_theta - rkappa))
+
         s = rs
-        s_dot = v * cos_delta / one_minus_kr_d
-        delta_theta_prime = one_minus_kr_d / cos_delta * kappa - rkappa
-        s_ddot = (a * cos_delta - s_dot * s_dot *
-                  (d_dot * delta_theta_prime - kappa_r_d_prime)) / one_minus_kr_d
+        s_dot = v * cos_delta_theta / one_minus_kappa_r_d
+
+        delta_theta_prime = one_minus_kappa_r_d / cos_delta_theta * kappa - rkappa
+        s_ddot = (a * cos_delta_theta -
+                  s_dot * s_dot *
+                  (d_dot * delta_theta_prime - kappa_r_d_prime)) / one_minus_kappa_r_d
+
         return [s, s_dot, s_ddot], [d, d_dot, d_ddot]
+
+    @ staticmethod
+    def frenet_to_cartesian(rs, rx, ry, rtheta, rkappa, rdkappa, s_condition, d_condition):
+        """
+        Convert state from Frenet coordinate to Cartesian coordinate
+
+        Parameters
+        ----------
+            rs: reference line s-coordinate
+            rx, ry: reference point coordinates
+            rtheta: reference point heading
+            rkappa: reference point curvature
+            rdkappa: reference point curvature rate
+            s_condition: [s(t), s'(t), s''(t)]
+            d_condition: [d(s), d'(s), d''(s)]
+
+        Returns
+        -------
+            x, y: position
+            theta: heading angle
+            kappa: curvature
+            v: velocity
+            a: acceleration
+        """
+        if abs(rs - s_condition[0]) >= 1.0e-6:
+            raise ValueError(
+                "The reference point s and s_condition[0] don't match")
+
+        cos_theta_r = math.cos(rtheta)
+        sin_theta_r = math.sin(rtheta)
+
+        x = rx - sin_theta_r * d_condition[0]
+        y = ry + cos_theta_r * d_condition[0]
+
+        one_minus_kappa_r_d = 1 - rkappa * d_condition[0]
+
+        tan_delta_theta = d_condition[1] / one_minus_kappa_r_d
+        delta_theta = math.atan2(d_condition[1], one_minus_kappa_r_d)
+        cos_delta_theta = math.cos(delta_theta)
+
+        theta = CartesianFrenetConverter.normalize_angle(delta_theta + rtheta)
+
+        kappa_r_d_prime = rdkappa * d_condition[0] + rkappa * d_condition[1]
+
+        kappa = (((d_condition[2] + kappa_r_d_prime * tan_delta_theta) *
+                  cos_delta_theta * cos_delta_theta) / one_minus_kappa_r_d + rkappa) * \
+            cos_delta_theta / one_minus_kappa_r_d
+
+        d_dot = d_condition[1] * s_condition[1]
+        v = math.sqrt(one_minus_kappa_r_d * one_minus_kappa_r_d *
+                      s_condition[1] * s_condition[1] + d_dot * d_dot)
+
+        delta_theta_prime = one_minus_kappa_r_d / cos_delta_theta * kappa - rkappa
+
+        a = (s_condition[2] * one_minus_kappa_r_d / cos_delta_theta +
+             s_condition[1] * s_condition[1] / cos_delta_theta *
+             (d_condition[1] * delta_theta_prime - kappa_r_d_prime))
+
+        return x, y, theta, kappa, v, a
+
+    @ staticmethod
+    def normalize_angle(angle):
+        """
+        Normalize angle to [-pi, pi]
+        """
+        a = math.fmod(angle + math.pi, 2.0 * math.pi)
+        if a < 0.0:
+            a += 2.0 * math.pi
+        return a - math.pi
 
 # ===========================
 #  Class: ParametricFunctions
