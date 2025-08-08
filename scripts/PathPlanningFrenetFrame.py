@@ -6,7 +6,7 @@ from matplotlib import animation
 from CartesianFrenetConverter import CartesianFrenetConverter
 
 class PathPlanningFrenetFrame:
-    def __init__(self, path_func, start, controller, L=1.5, D=2.0, dt=0.1, T=100):
+    def __init__(self, path_func, start, controller, L=1.5, D=2.0, dt=0.1, T=60):
         self.path_func = path_func
         self.controller = controller
         self.L = L
