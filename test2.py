@@ -126,9 +126,8 @@ class Controller:
                  use_exp_smooth=False, smooth_alpha=0.3):
         """
         MPC controller using only lateral Frenet errors of mule, hitch, trailer.
-        Key tuning names:
-        - w_d_mule: lateral deviation weight for mule (increase to follow path more strictly)
-        - controller lookahead = N * dt
+        - w_d_mule is the key weight to enforce strict lateral following (increase if you want stricter)
+        - lookahead = N * dt
         """
         self.N = N
         self.dt = dt
@@ -149,7 +148,6 @@ class Controller:
         self.smooth_alpha = smooth_alpha
 
     def wrap_angle(self, angle):
-        """Wrap angle to [-pi, pi]."""
         return (angle + np.pi) % (2 * np.pi) - np.pi
 
     def step_dynamics(self, state, omega, L, D):
@@ -170,28 +168,16 @@ class Controller:
         ])
 
     def lateral_deviation(self, x, y, theta_ref, rx, ry):
-        """
-        Compute lateral deviation d for pose (x,y) relative to reference path point (rx, ry, theta_ref).
-        """
         return math.sin(theta_ref) * (x - rx) - math.cos(theta_ref) * (y - ry)
 
     def compute_hitch_trailer_pose(self, mule_pose, phi, L, D):
-        """
-        Compute hitch and trailer poses from mule pose and hitch angle phi.
-        Returns: (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer)
-        """
         x, y, theta = mule_pose
-
-        # Hitch position behind mule by L
         x_hitch = x - L * np.cos(theta)
         y_hitch = y - L * np.sin(theta)
         theta_hitch = self.wrap_angle(theta + phi)
-
-        # Trailer position behind hitch by D
         x_trailer = x_hitch - D * np.cos(theta_hitch)
         y_trailer = y_hitch - D * np.sin(theta_hitch)
-        theta_trailer = theta_hitch  # trailer heading same as hitch
-
+        theta_trailer = theta_hitch
         return (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer)
 
     def cost(self, omega_seq, state0, t0, path_func, L, D):
@@ -206,37 +192,30 @@ class Controller:
 
             t_pred = t0 + (i + 1) * self.dt
 
-            # Reference point for mule at current predicted time
             rx, ry, theta_ref = path_func(t_pred)
 
-            # Time-shifted reference points for hitch and trailer (accounting for physical offset)
             t_hitch = max(t_pred - L / self.v, 0.0)
             t_trailer = max(t_pred - (L + D) / self.v, 0.0)
 
             rx_hitch, ry_hitch, theta_ref_hitch = path_func(t_hitch)
             rx_trailer, ry_trailer, theta_ref_trailer = path_func(t_trailer)
 
-            # Lateral deviation for mule
             d_mule = self.lateral_deviation(x, y, theta_ref, rx, ry)
 
-            # Hitch and trailer poses
             (x_h, y_h, th_h), (x_t, y_t, th_t) = self.compute_hitch_trailer_pose((x, y, theta), phi, L, D)
 
-            # Lateral deviations for hitch and trailer relative to their shifted reference points
             d_hitch = self.lateral_deviation(x_h, y_h, theta_ref_hitch, rx_hitch, ry_hitch)
             d_trailer = self.lateral_deviation(x_t, y_t, theta_ref_trailer, rx_trailer, ry_trailer)
 
-            # Accumulate weighted lateral deviation costs
             J += self.w_d_mule * (d_mule ** 2)
             J += self.w_d_hitch * (d_hitch ** 2)
             J += self.w_d_trailer * (d_trailer ** 2)
 
-            # Regularize omega and omega rate change
             J += self.w_omega * (omega ** 2)
             J += self.w_omega_rate * ((omega - prev_omega) ** 2)
 
             heading_err = math.atan2(math.sin(theta - theta_ref), math.cos(theta - theta_ref))
-            J += 200.0 * (heading_err ** 2)  # small weight, tune as needed
+            J += 200.0 * (heading_err ** 2)
 
             prev_omega = omega
 
@@ -277,10 +256,13 @@ class Obstacle:
 
 class PathPlanningFrenetFrame:
     """
-    Frenet-based detour using a Gaussian (bell-curve) bump d(s) precomputed and latched
-    onto the parametric path.
+    Quintic-framed detour:
+      - uses a quintic smoothstep phi(z)=10z^3-15z^4+6z^5 mapped to d(s)=A*phi(z)
+      - pre-starts detour by `pre_start` meters so vehicle begins steering earlier
+      - chooses sign to move away from obstacle and clamps amplitude
+      - ensures d, d', d'' == 0 at s0 and s1 for smooth curvature continuity
     """
-    def __init__(self, path_func, start, controller, L=1.5, D=2.0, dt=0.1, T=60):
+    def __init__(self, path_func, start, controller, L=1.5, D=2.0, dt=0.1, T=100):
         self.path_func = path_func
         self.controller = controller
         self.L = L
@@ -293,47 +275,43 @@ class PathPlanningFrenetFrame:
         self.phi = self.theta
         self.v = controller.v
 
+        # logs
         self.states = []
         self.hitches = []
         self.trailers = []
         self.frenet_states = []
         self.frenet_hitches = []
         self.frenet_trailers = []
-
-        # Precompute Frenet reference path logs
         self.ref_s = []
         self.ref_d = []
 
-        # Obstacles list
+        # obstacles + avoidance params
         self.obstacles = []
-        # clearance around obstacle surface (how far laterally we want to be)
         self.clearance = 1.0
-        # influence margin beyond (radius + clearance) to trigger detection
         self.influence_margin = 3.0
-        # detour span (s-length) over which Gaussian bump is significant
-        self.detour_span = 4.0  # meters; tune if needed
-        # Gaussian sigma will be set as detour_span / 3 (so tails near zero at ends)
+        self.detour_span = 6.0      # meters of s coverage (increase for smoother gentler detour)
+        self.pre_start = 2.0        # meters *before* obstacle center where detour should begin
+        self.max_amplitude = 2.5    # clamp amplitude to avoid extreme maneuvers (m)
 
-        # Frenet detour state
+        # detour state (in s)
         self.detour_active = False
-        self.detour_s_center = None
         self.detour_s0 = None
         self.detour_s1 = None
-        self.detour_amplitude = None
-        self.detour_sigma = None
+        self.detour_s_center = None
+        self.detour_A = None
         self.detour_obs = None
 
-        # debug flag
+        self.sim_time = 0.0
         self.debug = False
 
-        # sim time
-        self.sim_time = 0.0
-
-    def add_obstacle(self, obstacle: Obstacle, clearance: float = 1.0, influence_margin: float = 3.0, detour_span: float = 4.0):
+    def add_obstacle(self, obstacle: Obstacle, clearance: float = 1.0, influence_margin: float = 3.0,
+                     detour_span: float = 6.0, pre_start: float = 2.0, max_amplitude: float = 2.5):
         self.obstacles.append(obstacle)
         self.clearance = clearance
         self.influence_margin = influence_margin
         self.detour_span = detour_span
+        self.pre_start = pre_start
+        self.max_amplitude = max_amplitude
 
     def compute_hitch_trailer(self):
         x_h = self.x - self.L * np.cos(self.theta)
@@ -343,21 +321,15 @@ class PathPlanningFrenetFrame:
         return np.array([x_h, y_h]), np.array([x_t, y_t])
 
     def _s_of_time(self, t):
-        """Arc-length along parametric path used as reference s (we used s = v * t)."""
         return t * self.v
 
     def _path_point(self, t):
-        """Return parametric path point (x,y,theta) at time t."""
         return self.path_func(t)
 
     def _distance_point_to_obs(self, x, y, obs):
         return math.hypot(x - obs.x, y - obs.y)
 
     def _should_plan_detour(self, current_t):
-        """
-        Scan the parametric path forward over MPC lookahead; if any point is within
-        obs.radius + clearance + influence_margin, request detour planning.
-        """
         lookahead = self.controller.N * self.controller.dt
         steps = max(1, int(lookahead / self.dt))
         for k in range(steps):
@@ -369,15 +341,11 @@ class PathPlanningFrenetFrame:
                 d = self._distance_point_to_obs(px, py, obs)
                 if d <= outer:
                     if self.debug:
-                        print(f"[detect] at t={current_t:.2f} horizon found t_check={t_check:.2f} d={d:.2f} obs@({obs.x},{obs.y})")
+                        print(f"[detect] t={current_t:.2f} found path near obs at t_check={t_check:.2f} d={d:.2f}")
                     return obs, t_check
         return None, None
 
     def _find_s_center(self, detect_t, obs, search_span=6.0):
-        """
-        Find t in [detect_t - search_span, detect_t + search_span] that minimizes distance to obstacle.
-        Use coarse sampling to find s_center.
-        """
         t0 = max(0.0, detect_t - search_span)
         t1 = detect_t + search_span
         N = max(20, int((t1 - t0) / self.dt))
@@ -392,117 +360,123 @@ class PathPlanningFrenetFrame:
                 best_t = tt
         s_center = self._s_of_time(best_t)
         if self.debug:
-            print(f"[find_center] best_t={best_t:.2f} best_d={best_d:.2f} s_center={s_center:.2f}")
+            print(f"[center] best_t={best_t:.2f} best_d={best_d:.2f} s_center={s_center:.2f}")
         return s_center, best_d
 
-    def _plan_detour_gaussian(self, detect_t, obs):
+    def _plan_quintic_detour(self, detect_t, obs):
         """
-        Plan a Gaussian detour bump in d(s):
-            d(s) = A * exp(- (s - s_center)^2 / (2 * sigma^2) )
-        We set:
-            - s_center at closest parametric point to obstacle
-            - span = detour_span, so set sigma = detour_span / 3 (≈ 99% mass inside ~±1.5 sigma)
-            - amplitude A chosen to move away from obstacle: A = sign * (obs.radius + clearance)
+        Plan a quintic smoothstep detour in s-domain:
+          - compute s_center near obstacle
+          - set s0 = s_center - span/2 - pre_start (start earlier)
+          - set s1 = s_center + span/2
+          - amplitude A = sign * (obs.radius + clearance + trailer_margin) clamped to max_amplitude
+          - use phi(z)=10z^3 -15z^4 +6z^5 so phi'(0)=phi'(1)=phi''(0)=phi''(1)=0
         """
         s_center, best_d = self._find_s_center(detect_t, obs)
+        half = 0.5 * self.detour_span
+        s0 = max(0.0, s_center - half - self.pre_start)
+        s1 = s_center + half
 
-        half_span = 0.5 * self.detour_span
-        s0 = max(0.0, s_center - half_span)
-        s1 = s_center + half_span
-
-        # Determine sign: compute normal left-vector at center and dot with obstacle vector
+        # compute sign: if obstacle is left of path, detour to right (negative d), else left.
         t_center = s_center / self.v
         rx, ry, theta_ref = self._path_point(t_center)
         vx = obs.x - rx
         vy = obs.y - ry
-        # left normal (points to left of path)
         nx = -math.sin(theta_ref)
         ny = math.cos(theta_ref)
         dot = vx * nx + vy * ny
-        # if obstacle is left (dot>0), detour should be to right (negative d)
         sign = -1.0 if dot > 0.0 else 1.0
-        A = sign * (obs.radius + self.clearance)
 
-        sigma = max(1e-3, self.detour_span / 3.0)
+        # extra margin to account for trailer/hitch: project trailer endpoint clearance approx
+        trailer_margin = max(0.0, self.D * 0.1 + self.L * 0.05)  # small heuristic
 
-        # Store detour parameters
+        A_req = sign * (obs.radius + self.clearance + trailer_margin)
+        # clamp amplitude
+        if abs(A_req) > self.max_amplitude:
+            A = math.copysign(self.max_amplitude, A_req)
+        else:
+            A = A_req
+
+        # store
         self.detour_active = True
-        self.detour_s_center = s_center
         self.detour_s0 = s0
         self.detour_s1 = s1
-        self.detour_amplitude = A
-        self.detour_sigma = sigma
+        self.detour_s_center = s_center
+        self.detour_A = A
         self.detour_obs = obs
-
         if self.debug:
-            print(f"[plan_gauss] s0={s0:.2f}, s_center={s_center:.2f}, s1={s1:.2f}, A={A:.2f}, sigma={sigma:.2f}")
+            print(f"[plan_quintic] s0={s0:.2f} s_center={s_center:.2f} s1={s1:.2f} A={A:.2f} sign={sign}")
 
     def _maybe_deactivate_detour(self, current_s):
-        """Deactivate detour once we have passed s1."""
         if not self.detour_active:
             return
         if current_s > self.detour_s1 + 1e-2:
             if self.debug:
-                print(f"[detour_done] current_s={current_s:.2f} > s1={self.detour_s1:.2f}, deactivating detour")
+                print(f"[done] current_s={current_s:.2f} > s1={self.detour_s1:.2f} -> deactivate")
             self.detour_active = False
-            self.detour_s_center = None
             self.detour_s0 = None
             self.detour_s1 = None
-            self.detour_amplitude = None
-            self.detour_sigma = None
+            self.detour_s_center = None
+            self.detour_A = None
             self.detour_obs = None
 
-    def _gaussian_bump(self, s):
+    # quintic smoothstep phi and derivative helpers
+    @staticmethod
+    def _phi(z):
+        # phi(z) = 10 z^3 - 15 z^4 + 6 z^5
+        return 10*z**3 - 15*z**4 + 6*z**5
+
+    @staticmethod
+    def _phi_d(z):
+        # phi'(z) = 30 z^2 - 60 z^3 + 30 z^4
+        return 30*z**2 - 60*z**3 + 30*z**4
+
+    @staticmethod
+    def _phi_dd(z):
+        # phi''(z) = 60 z - 180 z^2 + 120 z^3
+        return 60*z - 180*z**2 + 120*z**3
+
+    def _quintic_bump(self, s):
         """
-        Evaluate Gaussian bump and its first two derivatives wrt s:
-            d(s) = A * exp(- (s - mu)^2 / (2 sigma^2))
-            d'(s) = A * (-(s-mu) / sigma^2) * exp(...)
-            d''(s) = A * ( ((s-mu)^2 / sigma^4) - (1 / sigma^2) ) * exp(...)
-        Returns (d, d_s, d_ss)
+        d(s) = A * phi(z), z=(s - s0)/(s1 - s0)
+        returns d, d_s, d_ss
+        d_s = A * phi'(z) * (1 / L)
+        d_ss = A * phi''(z) * (1 / L^2)
         """
-        if (not self.detour_active) or (self.detour_s_center is None):
+        if (not self.detour_active) or (self.detour_s0 is None):
             return 0.0, 0.0, 0.0
-        mu = self.detour_s_center
-        sigma = self.detour_sigma
-        A = self.detour_amplitude
-        z = (s - mu)
-        expv = math.exp(-0.5 * (z * z) / (sigma * sigma))
-        d = A * expv
-        d_s = A * (-z / (sigma * sigma)) * expv
-        d_ss = A * ((z * z) / (sigma * sigma * sigma * sigma) - 1.0 / (sigma * sigma)) * expv
+        s0 = self.detour_s0
+        s1 = self.detour_s1
+        if s < s0 - 1e-9 or s > s1 + 1e-9:
+            return 0.0, 0.0, 0.0
+        L = max(1e-6, s1 - s0)
+        z = (s - s0) / L
+        A = self.detour_A
+        phi = self._phi(z)
+        phi_d = self._phi_d(z)
+        phi_dd = self._phi_dd(z)
+        d = A * phi
+        d_s = A * phi_d / L
+        d_ss = A * phi_dd / (L * L)
         return d, d_s, d_ss
 
     def avoidance_path_frenet(self, t_pred):
-        """
-        If detour is active and s_pred near detour, return frenet->cartesian conversion
-        using the Gaussian lateral offset. Otherwise return parametric point.
-        """
         rx, ry, rtheta = self._path_point(t_pred)
         s = self._s_of_time(t_pred)
-
-        # If no detour, return parametric
         if not self.detour_active:
             return rx, ry, rtheta
-
-        # If outside planned detour support, return parametric
-        if s < (self.detour_s0 - 1e-8) or s > (self.detour_s1 + 1e-8):
+        if s < (self.detour_s0 - 1e-9) or s > (self.detour_s1 + 1e-9):
             return rx, ry, rtheta
-
-        # Compute d(s), d'(s), d''(s)
-        d, d_s, d_ss = self._gaussian_bump(s)
-
-        # s_condition: [s, s_dot, s_ddot] ; s_dot = v ; s_ddot = 0
+        d, d_s, d_ss = self._quintic_bump(s)
         s_cond = [s, self.v, 0.0]
         d_cond = [d, d_s, d_ss]
-
-        # Convert frenet to cartesian using reference at same s (t_pred)
         try:
             x, y, theta_det, kappa, v_out, a_out = CartesianFrenetConverter.frenet_to_cartesian(
                 rs=s, rx=rx, ry=ry, rtheta=rtheta, rkappa=0.0, rdkappa=0.0,
                 s_condition=s_cond, d_condition=d_cond)
         except Exception as e:
             if self.debug:
-                print(f"[frenet_conv_err] {e}")
+                print(f"[conv_err] {e}")
             return rx, ry, rtheta
         return x, y, theta_det
 
@@ -511,16 +485,13 @@ class PathPlanningFrenetFrame:
             t = i * self.dt
             current_s = self._s_of_time(t)
 
-            # If no detour active, check if we need to plan one
             if not self.detour_active:
                 obs, detect_t = self._should_plan_detour(t)
                 if obs is not None and detect_t is not None:
-                    self._plan_detour_gaussian(detect_t, obs)
+                    self._plan_quintic_detour(detect_t, obs)
 
-            # Deactivate if we passed the detour
             self._maybe_deactivate_detour(current_s)
 
-            # Build path_func closure for MPC (uses frenet detour if active)
             path_func_local = lambda t_pred: self.avoidance_path_frenet(t_pred)
 
             omega = self.controller.mpc(self.x, self.y, self.theta, self.phi,
@@ -533,7 +504,6 @@ class PathPlanningFrenetFrame:
             self.theta += omega * self.dt
             self.theta = CartesianFrenetConverter.normalize_angle(self.theta)
 
-            # advance sim time
             self.sim_time += self.dt
 
             hitch, trailer = self.compute_hitch_trailer()
@@ -543,7 +513,7 @@ class PathPlanningFrenetFrame:
             self.hitches.append(hitch)
             self.trailers.append(trailer)
 
-            # Log Frenet (for mule, hitch, trailer) using original parametric reference
+            # Log Frenet (for mule, hitch, trailer) using original parametric ref
             x_ref, y_ref, theta_ref = self.path_func(t)
             for point, storage in zip([[self.x, self.y, self.theta],
                                        [hitch[0], hitch[1], self.theta],
@@ -556,11 +526,10 @@ class PathPlanningFrenetFrame:
                 )
                 storage.append([s_cond[0], d_cond[0]])
 
-            # store Frenet reference path
             self.ref_s.append(current_s)
             self.ref_d.append(0.0)
 
-        # convert lists to arrays
+        # convert to arrays
         self.states = np.array(self.states)
         self.hitches = np.array(self.hitches)
         self.trailers = np.array(self.trailers)
@@ -573,14 +542,12 @@ class PathPlanningFrenetFrame:
     def animate(self):
         fig, (ax_cart, ax_frenet) = plt.subplots(1, 2, figsize=(12, 6))
 
-        # ==== Cartesian Plot ====
         ax_cart.set_aspect('equal')
         ax_cart.set_xlim(-12, 12)
         ax_cart.set_ylim(-12, 12)
         circle = plt.Circle((0, 0), 10, color='gray', fill=False, linestyle='--')
         ax_cart.add_patch(circle)
 
-        # plot obstacles
         for obs in self.obstacles:
             obs_patch = plt.Circle((obs.x, obs.y), obs.radius, color='magenta', alpha=0.3)
             infl_patch = plt.Circle((obs.x, obs.y), obs.radius + self.clearance + self.influence_margin,
@@ -597,7 +564,6 @@ class PathPlanningFrenetFrame:
         ax_cart.legend()
         ax_cart.set_title("Cartesian Frame")
 
-        # ==== Frenet Plot ====
         ax_frenet.set_xlim(0, self.steps * self.dt * self.v)
         ax_frenet.set_ylim(-5, 5)
         ax_frenet.axhline(0, color='gray', linestyle='--', label='Reference Path (d=0)')
@@ -609,7 +575,6 @@ class PathPlanningFrenetFrame:
         ax_frenet.set_ylabel("d (lateral deviation)")
         ax_frenet.set_title("Frenet Frame")
 
-        # ==== Precompute Frenet Coordinates ====
         frenet_coords = []
         s_accum = 0
         for i in range(len(self.states)):
@@ -661,12 +626,18 @@ if __name__ == "__main__":
     sim = PathPlanningFrenetFrame(path_func, (0, 0, np.pi/4), controller, L=1.5, D=2.0, dt=0.1, T=60)
 
     # Add a circular obstacle at (10,0) radius 1
-    sim.add_obstacle(Obstacle(10.0, 0.0, 0.5), clearance=0.5, influence_margin=0.5, detour_span=4.0)
-    sim.add_obstacle(Obstacle(-10.0, 0.0, 0.5), clearance=0.5, influence_margin=0.5, detour_span=4.0)
+    sim.add_obstacle(Obstacle(10.0, 0.0, 0.2),
+                     clearance=1.0, influence_margin=1.0,
+                     detour_span=5.0, pre_start=4.0, max_amplitude=0.5)
+    sim.add_obstacle(Obstacle(-7.0, 5.0, 0.2),
+                     clearance=1.0, influence_margin=1.0,
+                     detour_span=5.0, pre_start=4.0, max_amplitude=0.5)
 
-    # Optional debugging
+    # Optional: make path tracking stricter
+    # controller.w_d_mule = 3000.0
+
+    # Enable debug prints if you need internal info
     # sim.debug = True
-    # controller.w_d_mule = 2000.0  # tighten lateral following if you want
 
     sim.simulate()
     sim.animate()
