@@ -148,6 +148,7 @@ class Controller:
         self.smooth_alpha = smooth_alpha
 
     def wrap_angle(self, angle):
+        """Wrap angle to [-pi, pi]."""
         return (angle + np.pi) % (2 * np.pi) - np.pi
 
     def step_dynamics(self, state, omega, L, D):
@@ -168,16 +169,28 @@ class Controller:
         ])
 
     def lateral_deviation(self, x, y, theta_ref, rx, ry):
+        """
+        Compute lateral deviation d for pose (x,y) relative to reference path point (rx, ry, theta_ref).
+        """
         return math.sin(theta_ref) * (x - rx) - math.cos(theta_ref) * (y - ry)
 
     def compute_hitch_trailer_pose(self, mule_pose, phi, L, D):
+        """
+        Compute hitch and trailer poses from mule pose and hitch angle phi.
+        Returns: (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer)
+        """
         x, y, theta = mule_pose
+
+        # Hitch position behind mule by L
         x_hitch = x - L * np.cos(theta)
         y_hitch = y - L * np.sin(theta)
         theta_hitch = self.wrap_angle(theta + phi)
+
+        # Trailer position behind hitch by D
         x_trailer = x_hitch - D * np.cos(theta_hitch)
         y_trailer = y_hitch - D * np.sin(theta_hitch)
-        theta_trailer = theta_hitch
+        theta_trailer = theta_hitch  # trailer heading same as hitch
+
         return (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer)
 
     def cost(self, omega_seq, state0, t0, path_func, L, D):
@@ -192,30 +205,37 @@ class Controller:
 
             t_pred = t0 + (i + 1) * self.dt
 
+            # Reference point for mule at current predicted time
             rx, ry, theta_ref = path_func(t_pred)
 
+            # Time-shifted reference points for hitch and trailer (accounting for physical offset)
             t_hitch = max(t_pred - L / self.v, 0.0)
             t_trailer = max(t_pred - (L + D) / self.v, 0.0)
 
             rx_hitch, ry_hitch, theta_ref_hitch = path_func(t_hitch)
             rx_trailer, ry_trailer, theta_ref_trailer = path_func(t_trailer)
 
+            # Lateral deviation for mule
             d_mule = self.lateral_deviation(x, y, theta_ref, rx, ry)
 
+            # Hitch and trailer poses
             (x_h, y_h, th_h), (x_t, y_t, th_t) = self.compute_hitch_trailer_pose((x, y, theta), phi, L, D)
 
+            # Lateral deviations for hitch and trailer relative to their shifted reference points
             d_hitch = self.lateral_deviation(x_h, y_h, theta_ref_hitch, rx_hitch, ry_hitch)
             d_trailer = self.lateral_deviation(x_t, y_t, theta_ref_trailer, rx_trailer, ry_trailer)
 
+            # Accumulate weighted lateral deviation costs
             J += self.w_d_mule * (d_mule ** 2)
             J += self.w_d_hitch * (d_hitch ** 2)
             J += self.w_d_trailer * (d_trailer ** 2)
 
+            # Regularize omega and omega rate change
             J += self.w_omega * (omega ** 2)
             J += self.w_omega_rate * ((omega - prev_omega) ** 2)
 
             heading_err = math.atan2(math.sin(theta - theta_ref), math.cos(theta - theta_ref))
-            J += 200.0 * (heading_err ** 2)
+            J += 200.0 * (heading_err ** 2)  # small weight, tune as needed
 
             prev_omega = omega
 
@@ -257,10 +277,10 @@ class Obstacle:
 class PathPlanningFrenetFrame:
     """
     Quintic-framed detour:
-      - uses a quintic smoothstep phi(z)=10z^3-15z^4+6z^5 mapped to d(s)=A*phi(z)
-      - pre-starts detour by `pre_start` meters so vehicle begins steering earlier
-      - chooses sign to move away from obstacle and clamps amplitude
-      - ensures d, d', d'' == 0 at s0 and s1 for smooth curvature continuity
+        - uses a quintic smoothstep phi(z)=10z^3-15z^4+6z^5 mapped to d(s)=A*phi(z)
+        - pre-starts detour by `pre_start` meters so vehicle begins steering earlier
+        - chooses sign to move away from obstacle and clamps amplitude
+        - ensures d, d', d'' == 0 at s0 and s1 for smooth curvature continuity
     """
     def __init__(self, path_func, start, controller, L=1.5, D=2.0, dt=0.1, T=100):
         self.path_func = path_func
@@ -282,6 +302,8 @@ class PathPlanningFrenetFrame:
         self.frenet_states = []
         self.frenet_hitches = []
         self.frenet_trailers = []
+
+        # Precompute Frenet reference path
         self.ref_s = []
         self.ref_d = []
 
@@ -542,6 +564,7 @@ class PathPlanningFrenetFrame:
     def animate(self):
         fig, (ax_cart, ax_frenet) = plt.subplots(1, 2, figsize=(12, 6))
 
+        # ==== Cartesian Plot ====
         ax_cart.set_aspect('equal')
         ax_cart.set_xlim(-12, 12)
         ax_cart.set_ylim(-12, 12)
@@ -564,6 +587,7 @@ class PathPlanningFrenetFrame:
         ax_cart.legend()
         ax_cart.set_title("Cartesian Frame")
 
+        # ==== Frenet Plot ====
         ax_frenet.set_xlim(0, self.steps * self.dt * self.v)
         ax_frenet.set_ylim(-5, 5)
         ax_frenet.axhline(0, color='gray', linestyle='--', label='Reference Path (d=0)')
@@ -575,29 +599,34 @@ class PathPlanningFrenetFrame:
         ax_frenet.set_ylabel("d (lateral deviation)")
         ax_frenet.set_title("Frenet Frame")
 
+        # ==== Precompute Frenet Coordinates ====
         frenet_coords = []
         s_accum = 0
         for i in range(len(self.states)):
             x, y = self.states[i]
             x_ref, y_ref, theta_ref = self.path_func(i * self.dt)
+            # project mule on ref path: s increases linearly with v*dt
             s_accum += self.v * self.dt
             d = np.sin(theta_ref) * (x - x_ref) - np.cos(theta_ref) * (y - y_ref)
             frenet_coords.append([s_accum, d])
         frenet_coords = np.array(frenet_coords)
 
         def init():
+            # Cartesian
             line_traj.set_data([], [])
             mule_point.set_data([], [])
             hitch_point.set_data([], [])
             trailer_point.set_data([], [])
             link1.set_data([], [])
             link2.set_data([], [])
+            # Frenet
             line_frenet.set_data([], [])
             mule_frenet_point.set_data([], [])
             return (line_traj, mule_point, hitch_point, trailer_point, link1, link2,
                     line_frenet, mule_frenet_point)
 
         def update(i):
+            # === Cartesian ===
             mule = self.states[i]
             hitch = self.hitches[i]
             trailer = self.trailers[i]
@@ -609,6 +638,7 @@ class PathPlanningFrenetFrame:
             link1.set_data([mule[0], hitch[0]], [mule[1], hitch[1]])
             link2.set_data([hitch[0], trailer[0]], [hitch[1], trailer[1]])
 
+            # === Frenet === (Only Mule)
             line_frenet.set_data(frenet_coords[:i+1, 0], frenet_coords[:i+1, 1])
             mule_frenet_point.set_data([frenet_coords[i, 0]], [frenet_coords[i, 1]])
 
@@ -616,7 +646,7 @@ class PathPlanningFrenetFrame:
                     line_frenet, mule_frenet_point)
 
         ani = animation.FuncAnimation(fig, update, frames=self.steps,
-                                      init_func=init, interval=50, blit=True)
+                                    init_func=init, interval=50, blit=True)
         plt.show()
 
 
@@ -625,16 +655,13 @@ if __name__ == "__main__":
     controller = Controller(N=10, dt=0.1, v=1.0)
     sim = PathPlanningFrenetFrame(path_func, (0, 0, np.pi/4), controller, L=1.5, D=2.0, dt=0.1, T=60)
 
-    # Add a circular obstacle at (10,0) radius 1
+    # Add a circular obstacle at (x,y) radius r
     sim.add_obstacle(Obstacle(10.0, 0.0, 0.2),
                      clearance=1.0, influence_margin=1.0,
                      detour_span=5.0, pre_start=4.0, max_amplitude=0.5)
     sim.add_obstacle(Obstacle(-7.0, 5.0, 0.2),
                      clearance=1.0, influence_margin=1.0,
                      detour_span=5.0, pre_start=4.0, max_amplitude=0.5)
-
-    # Optional: make path tracking stricter
-    # controller.w_d_mule = 3000.0
 
     # Enable debug prints if you need internal info
     # sim.debug = True

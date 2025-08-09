@@ -14,8 +14,10 @@ class Controller:
         MPC controller using only lateral Frenet errors of mule, hitch, trailer.
         - N: horizon steps
         - dt: timestep
+        - lookahead = N * dt
         - v: forward speed (constant)
         - w_d_mule/hitch/trailer: weights on lateral deviations
+        - w_d_mule is the key weight to enforce strict lateral following (increase if you want stricter)
         - w_omega, w_omega_rate: regularization on omega magnitude and rate
         - omega_bounds: bounds on steering rate omega
         - max_delta_omega: max allowed change in omega per step
