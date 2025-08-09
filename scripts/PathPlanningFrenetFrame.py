@@ -302,8 +302,15 @@ class PathPlanningFrenetFrame:
         ax_cart.set_aspect('equal')
         ax_cart.set_xlim(-12, 12)
         ax_cart.set_ylim(-12, 12)
-        circle = plt.Circle((0, 0), 10, color='gray', fill=False, linestyle='--')
-        ax_cart.add_patch(circle)
+
+        # --- Plot reference path from path_func ---
+        t_vals = np.linspace(0, self.T, 500)
+        ref_x, ref_y = [], []
+        for t in t_vals:
+            px, py, _ = self.path_func(t)
+            ref_x.append(px)
+            ref_y.append(py)
+        ax_cart.plot(ref_x, ref_y, 'k--', alpha=0.5, label='Reference Path')
 
         for obs in self.obstacles:
             obs_patch = plt.Circle((obs.x, obs.y), obs.radius, color='magenta', alpha=0.3)
@@ -313,6 +320,7 @@ class PathPlanningFrenetFrame:
             ax_cart.add_patch(infl_patch)
 
         line_traj, = ax_cart.plot([], [], 'r-', label='Mule Path')
+        trailer_traj, = ax_cart.plot([], [], color='lightblue', linestyle='-', label='Trailer Path')
         mule_point, = ax_cart.plot([], [], 'ro', label='Mule')
         hitch_point, = ax_cart.plot([], [], 'yo', label='Hitch')
         trailer_point, = ax_cart.plot([], [], 'ko', label='Trailer')
@@ -348,6 +356,7 @@ class PathPlanningFrenetFrame:
         def init():
             # Cartesian
             line_traj.set_data([], [])
+            trailer_traj.set_data([], [])
             mule_point.set_data([], [])
             hitch_point.set_data([], [])
             trailer_point.set_data([], [])
@@ -356,7 +365,7 @@ class PathPlanningFrenetFrame:
             # Frenet
             line_frenet.set_data([], [])
             mule_frenet_point.set_data([], [])
-            return (line_traj, mule_point, hitch_point, trailer_point, link1, link2,
+            return (line_traj, mule_point, trailer_traj, hitch_point, trailer_point, link1, link2,
                     line_frenet, mule_frenet_point)
 
         def update(i):
@@ -366,6 +375,7 @@ class PathPlanningFrenetFrame:
             trailer = self.trailers[i]
 
             line_traj.set_data(self.states[:i+1, 0], self.states[:i+1, 1])
+            trailer_traj.set_data(self.trailers[:i+1, 0], self.trailers[:i+1, 1])
             mule_point.set_data([mule[0]], [mule[1]])
             hitch_point.set_data([hitch[0]], [hitch[1]])
             trailer_point.set_data([trailer[0]], [trailer[1]])
@@ -376,7 +386,7 @@ class PathPlanningFrenetFrame:
             line_frenet.set_data(frenet_coords[:i+1, 0], frenet_coords[:i+1, 1])
             mule_frenet_point.set_data([frenet_coords[i, 0]], [frenet_coords[i, 1]])
 
-            return (line_traj, mule_point, hitch_point, trailer_point, link1, link2,
+            return (line_traj, mule_point, trailer_traj, hitch_point, trailer_point, link1, link2,
                     line_frenet, mule_frenet_point)
 
         ani = animation.FuncAnimation(fig, update, frames=self.steps,
