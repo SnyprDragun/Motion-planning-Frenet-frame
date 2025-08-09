@@ -391,4 +391,7 @@ class PathPlanningFrenetFrame:
 
         ani = animation.FuncAnimation(fig, update, frames=self.steps,
                                     init_func=init, interval=50, blit=True)
+        # writer = animation.PillowWriter(fps=100) # Adjust fps (frames per second) as needed
+        # ani.save('path_following.gif', writer=writer)
+        # ani.save('obstacle_avoidance.gif', writer=writer)
         plt.show()
