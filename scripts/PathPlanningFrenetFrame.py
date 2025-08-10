@@ -1,5 +1,6 @@
 #!/Users/subhodeep/venv/bin/python
 
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -15,6 +16,7 @@ class PathPlanningFrenetFrame:
         - ensures d, d', d'' == 0 at s0 and s1 for smooth curvature continuity
     """
     def __init__(self, path_func, start, controller, L=1.5, D=2.0, dt=0.1, T=100, is_reverse=False):
+        self.start_simulation = time.time()
         self.path_func = path_func
         self.controller = controller
         self.L = L
@@ -464,10 +466,6 @@ class PathPlanningFrenetFrame:
 
                 return (line_trailer, trailer_point, hitch_point, mule_point, link1, link2, frenet_trailer_error)
 
-            ani = animation.FuncAnimation(fig, update, frames=self.steps,
-                                        init_func=init, interval=50, blit=True)
-            plt.show()
-
         else:
             # ==== OBSTACLES ====
             for obs in self.obstacles:
@@ -547,9 +545,19 @@ class PathPlanningFrenetFrame:
                 return (mule_traj, mule_point, trailer_traj, hitch_point, trailer_point, link1, link2,
                         line_frenet, mule_frenet_point)
 
-            ani = animation.FuncAnimation(fig, update, frames=self.steps,
-                                        init_func=init, interval=50, blit=True)
-            # writer = animation.PillowWriter(fps=100) # Adjust fps (frames per second) as needed
-            # ani.save('path_following.gif', writer=writer)
-            # ani.save('obstacle_avoidance.gif', writer=writer)
-            plt.show()
+        ani = animation.FuncAnimation(fig, update, frames=self.steps,
+                                    init_func=init, interval=50, blit=True)
+        # writer = animation.PillowWriter(fps=100) # Adjust fps (frames per second) as needed
+        # ani.save('path_following.gif', writer=writer)
+        # ani.save('obstacle_avoidance.gif', writer=writer)
+        self.displayTime(self.start_simulation, time.time())
+        plt.show()
+
+    def displayTime(self, start, end):
+        k = int(end - start)
+        mins = (k // 60)
+        if end - start < 1:
+            secs = (((end - start) * 10000) // 100) / 100
+        else:
+            secs = k - (mins * 60)
+        print("Time taken: ", mins, "minutes, ", secs, "seconds")
