@@ -1,1 +1,1 @@
-res
+from scipy.optimize import minimize
