@@ -89,7 +89,7 @@ class PathPlanningFrenetFrame:
         steps = max(1, int(lookahead / self.dt))
         for k in range(steps):
             t_check = current_t + k * self.dt
-            px, py, _ = self._path_point(t_check)
+            px, py, ptheta, pkappa = self._path_point(t_check)
             for obs in self.obstacles:
                 inner = obs.radius + self.clearance
                 outer = inner + self.influence_margin
@@ -108,7 +108,7 @@ class PathPlanningFrenetFrame:
         best_d = float('inf')
         for i in range(N + 1):
             tt = t0 + (t1 - t0) * (i / N)
-            px, py, _ = self._path_point(tt)
+            px, py, ptheta, pkappa = self._path_point(tt)
             d = self._distance_point_to_obs(px, py, obs)
             if d < best_d:
                 best_d = d
@@ -134,7 +134,7 @@ class PathPlanningFrenetFrame:
 
         # compute sign: if obstacle is left of path, detour to right (negative d), else left.
         t_center = s_center / self.v
-        rx, ry, theta_ref = self._path_point(t_center)
+        rx, ry, theta_ref, kappa_ref = self._path_point(t_center)
         vx = obs.x - rx
         vy = obs.y - ry
         nx = -math.sin(theta_ref)
@@ -216,12 +216,12 @@ class PathPlanningFrenetFrame:
         return d, d_s, d_ss
 
     def avoidance_path_frenet(self, t_pred):
-        rx, ry, rtheta = self._path_point(t_pred)
+        rx, ry, rtheta, rkappa = self._path_point(t_pred)
         s = self._s_of_time(t_pred)
         if not self.detour_active:
-            return rx, ry, rtheta
+            return rx, ry, rtheta, rkappa
         if s < (self.detour_s0 - 1e-9) or s > (self.detour_s1 + 1e-9):
-            return rx, ry, rtheta
+            return rx, ry, rtheta, rkappa
         d, d_s, d_ss = self._quintic_bump(s)
         s_cond = [s, self.v, 0.0]
         d_cond = [d, d_s, d_ss]
@@ -232,8 +232,8 @@ class PathPlanningFrenetFrame:
         except Exception as e:
             if self.debug:
                 print(f"[conv_err] {e}")
-            return rx, ry, rtheta
-        return x, y, theta_det
+            return rx, ry, rtheta, rkappa
+        return x, y, theta_det, kappa
 
     def simulate(self):
         for i in range(self.steps):
@@ -270,7 +270,7 @@ class PathPlanningFrenetFrame:
             self.trailers.append(trailer)
 
             # Log Frenet (for mule, hitch, trailer) using original parametric ref
-            x_ref, y_ref, theta_ref = self.path_func(t)
+            x_ref, y_ref, theta_ref, kappa_ref = self.path_func(t)
             for point, storage in zip([[self.x, self.y, self.theta],
                                        [hitch[0], hitch[1], self.theta],
                                        [trailer[0], trailer[1], self.theta]],
@@ -307,7 +307,7 @@ class PathPlanningFrenetFrame:
         t_vals = np.linspace(0, self.T, 500)
         ref_x, ref_y = [], []
         for t in t_vals:
-            px, py, _ = self.path_func(t)
+            px, py, ptheta, pkappa = self.path_func(t)
             ref_x.append(px)
             ref_y.append(py)
         ax_cart.plot(ref_x, ref_y, 'k--', alpha=0.5, label='Reference Path')
@@ -346,7 +346,7 @@ class PathPlanningFrenetFrame:
         s_accum = 0
         for i in range(len(self.states)):
             x, y = self.states[i]
-            x_ref, y_ref, theta_ref = self.path_func(i * self.dt)
+            x_ref, y_ref, theta_ref, kappa_ref = self.path_func(i * self.dt)
             # project mule on ref path: s increases linearly with v*dt
             s_accum += self.v * self.dt
             d = np.sin(theta_ref) * (x - x_ref) - np.cos(theta_ref) * (y - y_ref)
