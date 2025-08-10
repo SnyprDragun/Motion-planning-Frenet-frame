@@ -19,13 +19,13 @@ In turn, the kinematics equations of the trailer can be derived from its linear 
 
 ## Simulations
 * Path Following on Figure Eight Curvatue
-![](path_following.gif)
+![](./simulation/path_following.gif)
 
 * Obstacle Avoidance on Figure Eight Curvatue
-![](obstacle_avoidance.gif)
+![](./simulation/obstacle_avoidance.gif)
 
 * Reverse Path Tracking on Figure Eight Curvatue
-![](reverse_tracking.gif)
+![](./simulation/reverse_tracking.gif)
 
 ## Play Around
 * Try other inbuilt parametric paths like circle, ellipse or even a straight line!
