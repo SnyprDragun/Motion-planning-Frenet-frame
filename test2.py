@@ -358,7 +358,6 @@ class PathPlanningFrenetFrame:
         self.ref_s_dense = None
         self._precompute_ref_path()
 
-
     def _precompute_ref_path(self):
         """Creates a high-resolution lookup table of the reference path."""
         # Create a dense set of points along the path, e.g., 5 points per simulation step
@@ -527,7 +526,7 @@ if __name__ == "__main__":
     start_pose_trailer = (x_start, y_start, CartesianFrenetConverter.normalize_angle(theta_start + math.pi))
     
     # Initialize and run the simulation
-    sim = PathPlanningFrenetFrame(path_func, start_pose_trailer, controller, L=1.5, D=2.0, T=60)
+    sim = PathPlanningFrenetFrame(path_func, start_pose_trailer, controller, L=1.5, D=2.0, T=80)
     print("Starting reverse tracking simulation with improved controller...")
     sim.simulate()
     print("Simulation complete. Starting animation...")
