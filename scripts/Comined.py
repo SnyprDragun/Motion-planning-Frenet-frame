@@ -1049,7 +1049,7 @@ if __name__ == "__main__":
     # is_reverse = True
 
     # path_func = lambda t: ParametricFunctions.figure_eight(t, a=10.0, v=1.0)
-    # controller = Controller(N=10, dt=0.1, v=1.0, is_reverse=is_reverse)
+    # controller = Controller(N=20, dt=0.1, v=1.0, is_reverse=is_reverse)
 
     # x_start, y_start, theta_start, kappa_start = path_func(0.01)
     # start_pose = (x_start, y_start, CartesianFrenetConverter.normalize_angle(theta_start + np.pi))
