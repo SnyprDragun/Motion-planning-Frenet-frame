@@ -15,7 +15,7 @@ The kinematics equations of the robot is the well-known unicycle model:<br>
 
 In turn, the kinematics equations of the trailer can be derived from its linear ($v_{t}$) and angular velocities ($\dot\phi$). This is given by:<br>
 >$v_{t} = v cos (\theta-\phi) + L\omega sin (\theta-\phi)$<br>
->$\dot\phi = v sin (\theta-\phi) - L\omega cos (\theta-\phi)$
+>$\dot\phi = \frac{v sin (\theta-\phi) - L\omega cos (\theta-\phi)}{D}$
 
 ## Simulations
 * Path Following on Figure Eight Curvatue
