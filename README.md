@@ -1,5 +1,5 @@
 # Motion Planning in Frenet-Serret Frame
-This repo provides modular codebase in both python and cpp, to track a mule-led-trailer robot in any path of random shape, given its parametric equation. The path is converted to the [Frenet-Serret frame](https://roboticsknowledgebase.com/wiki/planning/frenet-frame-planning/) and lateral deviation from reference path is penalized, to achieve strict adherance. A Model Predictive Control strategy is implemented to for trajectory tracking. The robot dynamics and simulation outputs are provided in further sections. 
+This repo provides modular codebase in both python and cpp, to track a mule-led-trailer robot in any path of random shape, given its parametric equation. The path is converted to the [Frenet-Serret frame](https://roboticsknowledgebase.com/wiki/planning/frenet-frame-planning/) and lateral deviation from reference path is penalized, to achieve strict adherence. A Model Predictive Control strategy is implemented to for trajectory tracking. The robot dynamics and simulation outputs are provided in further sections. 
 
 ## Requirements
 * [Python 3.13.5](https://www.python.org/downloads/release/python-3135/)
