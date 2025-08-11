@@ -1,10 +1,10 @@
 # Motion Planning in Frenet-Serret Frame
-This repo provides modular codebase in both python and cpp, to track a mule-led-trailer robot in any path of random shape, given its parametric equation. The path is converted to the Frenet-Serret frame and lateral deviation from reference path is penalized, to achieve strict adherance. A Model Predictive Control strategy is implemented to for trajectory tracking. The robot dynamics and simulation outputs are provided in further sections. 
+This repo provides modular codebase in both python and cpp, to track a mule-led-trailer robot in any path of random shape, given its parametric equation. The path is converted to the [Frenet-Serret frame](https://roboticsknowledgebase.com/wiki/planning/frenet-frame-planning/) and lateral deviation from reference path is penalized, to achieve strict adherance. A Model Predictive Control strategy is implemented to for trajectory tracking. The robot dynamics and simulation outputs are provided in further sections. 
 
 ## Requirements
-* Python 3.13.5
-* matplotlib 3.10.3
-* scipy 1.6.1
+* [Python 3.13.5](https://www.python.org/downloads/release/python-3135/)
+* [matplotlib 3.10.3](https://pypi.org/project/matplotlib/)
+* [scipy 1.6.1](https://pypi.org/project/scipy/1.6.1/)
 
 ## Robot Dynamics
 The position of the robot (mule) is given by $(x, y, θ)$. This point is at the centre of the front axle. Along the line from this point to the rear wheel and beyond is the hitch, at distance $L$. Further, we have a trailer connected to this hitch point. The rear wheel of this trailer is at a distance $D$ from the hitch. We assume the line connecting the hitch and the two back wheels form an angle $\phi$.
@@ -34,4 +34,4 @@ In turn, the kinematics equations of the trailer can be derived from its linear 
 
 ## NOTE
 * Obstacle avoidance is not yet supported for reverse tracking motion.
-
+* cpp implementation and version release coming soon!
