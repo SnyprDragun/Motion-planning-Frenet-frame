@@ -1,5 +1,5 @@
 /*
-    Script for conversions between Cartesian and Frenet-Serret frame
+    Script for parametric equations of candidate path
     Author: Subhodeep Choudhury
     Source: https://github.com/SnyprDragun/Motion-planning-Frenet-frame
 */

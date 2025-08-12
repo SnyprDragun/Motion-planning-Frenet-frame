@@ -1,5 +1,5 @@
 /*
-    Header for conversions between Cartesian and Frenet-Serret frame
+    Header for path planning and task solver class
     Author: Subhodeep Choudhury
     Source: https://github.com/SnyprDragun/Motion-planning-Frenet-frame
 */

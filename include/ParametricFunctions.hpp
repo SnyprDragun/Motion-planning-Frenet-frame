@@ -1,5 +1,5 @@
 /*
-    Header for conversions between Cartesian and Frenet-Serret frame
+    Header for parametric equations of candidate path
     Author: Subhodeep Choudhury
     Source: https://github.com/SnyprDragun/Motion-planning-Frenet-frame
 */
@@ -9,15 +9,9 @@
 
 #include <array>
 #include <cmath>
+#include "PathPoint.hpp"
 
 using namespace std;
-
-struct PathPoint {
-    double x;
-    double y;
-    double theta;
-    double kappa;
-};
 
 class ParametricFunctions {
     private:
