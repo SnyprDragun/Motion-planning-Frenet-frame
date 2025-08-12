@@ -12,20 +12,24 @@
 
 using namespace std;
 
+struct PathPoint {
+    double x;
+    double y;
+    double theta;
+    double kappa;
+};
+
 class ParametricFunctions {
     private:
         
 
     public:
-        double radius;
-        double minor_axis;
-        double major_axis;
-        ParametricFunctions(double);
-        ParametricFunctions(double, double);
+        ParametricFunctions();
         ~ParametricFunctions();
-        array<double,2> figure_eight(double);
-        array<double,2> figure_circle(double);
-        array<double,2> figure_ellipse(double);
+        static PathPoint straight_line(double, double, double, double);
+        static PathPoint circle(double, double, double);
+        static PathPoint ellipse(double, double, double, double);
+        static PathPoint figure_eight(double, double, double);
 };
 
 #endif

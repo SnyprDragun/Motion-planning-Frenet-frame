@@ -125,10 +125,6 @@ double CartesianFrenetConverter::normalize_angle(double angle){
     Normalize angle to [-pi, pi]
     */
 
-    double a = fmod(angle + M_PI, 2.0 * M_PI);
-    if (a < 0.0){
-        a += 2.0 * M_PI;
-    }
-
-    return a - M_PI;
+    const double two_pi = 2.0 * M_PI;
+    return angle - two_pi * floor((angle + M_PI) / two_pi) - M_PI;
 }
