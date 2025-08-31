@@ -99,6 +99,7 @@ class RobotDynamics:
         self.end_trailer_pose = offset
 
         self.control_actions = []
+        self.calculate_mule_pose()
 
     def calculate_mule_pose(self):
         r'''
@@ -186,17 +187,6 @@ class RobotDynamics:
 
         return np.append(np.asarray(self.mule_position), np.asarray(self.mule_orientation))
 
-        # try:
-        #     print(self.mule_position, self.calculate_mule_pose())
-        #     if all(self.mule_position[i] == self.calculate_mule_pose()[i] for i in range(self.trailer_count)):
-        #         return self.mule_position, self.mule_orientation
-        #     else:
-        #         print("MISMATCH")
-        #     print("MISMATCH")
-        # except:
-        #     print("Internal Error")
-        #     return None
-
     def v_trailer(self, v, omega, i):
         r'''
         $v_{t, i} = v\cos(\theta_{i}-\phi_{i}) + L_{i}\omega\sin(\theta_{i}-\phi_{i})$
@@ -224,12 +214,8 @@ class RobotDynamics:
         |[$x_{mule}$, $y_{mule}$] | [$x_{h, 1}$, $y_{h,1}$]  | [$x_{t, 1}$, $y_{t,1}$]   | [$x_{h, 2}$, $y_{h,2}$]   | [$x_{t, 2}$, $y_{t,2}$]   |
         +--------------+-------------+--------------+--------------+--------------+----....
         '''
-        x_err = np.square(np.abs((self.mule_position[0] - self.calculate_mule_pose()[0]) / self.mule_position[0]))
-        y_err = np.square(np.abs((self.mule_position[1] - self.calculate_mule_pose()[1]) / self.mule_position[1]))
-        error = 100 * np.sqrt(x_err + y_err)
-
         headers = ["Mule"]
-        rows = [[[round(float(xy), 2) for xy in self.calculate_mule_pose()]]]
+        rows = [[[round(float(xy), 2) for xy in self.mule_position]]]
         for i in range(self.trailer_count):
             headers += [f"Hitch {i+1}"] + [f"Trailer {i+1}"]
             hitch, trailer = self.calculate_kth_hitch_trailer_pose(i+1)
@@ -238,9 +224,6 @@ class RobotDynamics:
             rows[0].append(hitch)
             rows[0].append(trailer)
         print(tabulate(rows, headers, tablefmt='grid'))
-
-        if error > 1 and error != 100:
-            print(f"Percentage Error in Mule pose: {error:.2f}%. Precautionary measures advised.")
 
 
 class Path():
@@ -311,7 +294,7 @@ class Path():
             kappa = 0
         else:
             kappa = (dx * ddy - dy * ddx) / speed_sq**(1.5)
-        return x, y, theta, kappa
+        return x, y, theta
 
     @staticmethod
     def straight_line(t, slope=0.0, intercept=0.0, v=1.0):
@@ -327,6 +310,7 @@ class Path():
 
     def add_obstacle(self, *obstacles):
         self.obstacles = obstacles
+        pass
 
 
 def wrap_angle(a: float) -> float:
@@ -529,7 +513,6 @@ class PathPlanningFrenetFrame:
 
     def control_loop(self):
         current_state = np.append(self.robot.mule_position, self.robot.mule_orientation)
-        # self.current_states.append(current_state)
         for t in np.arange(0, self.T, self.dt):
             target_state = Path.circle(t)
             control_action = self.controller.control(current_state, target_state)
