@@ -73,7 +73,20 @@ How does it work? Framework outline:
 '''
 
 class CartesianFrenetConverter:
-    pass
+    @staticmethod
+    def cartesian_to_frenet():
+        pass
+
+    @staticmethod
+    def frenet_to_cartesian():
+        pass
+
+    @ staticmethod
+    def normalize_angle(angle):
+        '''
+        Normalize angle to [-pi, pi]
+        '''
+        return (angle + np.pi) % (2 * np.pi) - np.pi
 
 
 class RobotDynamics:
@@ -228,7 +241,8 @@ class RobotDynamics:
 
 class Path():
     '''
-    Generates parametric paths. Also returns the path's curvature.
+    Parametric functions to generate path points. Also handles obstcale avoidance. 
+    Returns. safe and optimal path point for traversal
     '''
     def __init__(self, shape):
         self.shape = shape
@@ -269,7 +283,7 @@ class Path():
             kappa = 0
         else:
             kappa = (dx * ddy - dy * ddx) / speed_sq**(1.5)
-        return x, y, theta, kappa
+        return x, y, theta
 
     @staticmethod
     def figure_eight(t, a=10.0, v=1.0):
@@ -306,17 +320,14 @@ class Path():
         y = slope * x + intercept
         theta = np.arctan2(slope, 1.0)
         kappa = 0.0
-        return x, y, theta, kappa
+        return x, y, theta
 
     def add_obstacle(self, *obstacles):
+        '''
+        Adds obstacle
+        '''
         self.obstacles = obstacles
         pass
-
-
-def wrap_angle(a: float) -> float:
-    """Wrap angle to [-pi, pi]."""
-    return (a + np.pi) % (2 * np.pi) - np.pi
-
 
 @dataclass
 class MPCParams:
@@ -389,7 +400,7 @@ class UnicycleMPC:
             pos_err = traj[:, :2] - x_ref[:2]          # (N+1, 2)
             e_xy2 = np.sum(pos_err**2, axis=1)        # (N+1,)
             if theta_ref_valid:
-                e_th = np.array([wrap_angle(th - x_ref[2]) for th in traj[:, 2]])
+                e_th = np.array([CartesianFrenetConverter.normalize_angle(th - x_ref[2]) for th in traj[:, 2]])
                 e_th2 = e_th**2
             else:
                 e_th2 = np.zeros(self.p.N + 1)
@@ -429,7 +440,7 @@ class UnicycleMPC:
             w = w_seq[k]
             x[0] = x[0] + dt * v * np.cos(x[2])
             x[1] = x[1] + dt * v * np.sin(x[2])
-            x[2] = wrap_angle(x[2] + dt * w)
+            x[2] = CartesianFrenetConverter.normalize_angle(x[2] + dt * w)
             traj.append(x.copy())
         return np.vstack(traj)
 
@@ -544,77 +555,44 @@ class PathPlanningFrenetFrame:
         print(tabulate(rows, headers, tablefmt='grid'))
 
     def plot(self, interval=100):
-        """
-        Animate target vs current trajectory and control inputs.
-
-        Args:
-            target_states (list of [x,y,theta]): target trajectory
-            current_states (list of [x,y,theta]): current trajectory
-            control_actions (list of [v, omega]): control inputs
-            interval (int): delay between frames in ms
-        """
-
-        # Convert to numpy arrays
         self.target_states = np.array(self.target_states)
         self.current_states = np.array(self.current_states)
         self.control_actions = np.array(self.control_actions)
 
-        n_frames = min(len(self.target_states), len(self.current_states), len(self.control_actions))
+        n_frames = int(self.T / self.dt)
         t = np.arange(n_frames)
 
-        # --- Figure and axes ---
-        fig, (ax_traj, ax_ctrls) = plt.subplots(1, 2, figsize=(12, 6))
-
-        # ---- Left plot (trajectory) ----
-        ax_traj.set_title("Trajectory")
-        ax_traj.set_xlabel("X")
-        ax_traj.set_ylabel("Y")
-
-        # plot full target path as dotted line
-        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Target")
-        current_line, = ax_traj.plot([], [], "r-", label="Current")
-
-        ax_traj.legend()
-        ax_traj.set_aspect("equal", adjustable="datalim")
-
-        # ---- Right plot (controls: v and omega) ----
-        ax_v = ax_ctrls.twinx()  # Create second axis if needed OR use subplots inside ax_ctrls
-        fig.subplots_adjust(wspace=0.4)
-
-        # Instead: make 2 vertical subplots on right
-        fig.clf()
+        # --- Create layout with gridspec: big traj on left, two stacked on right
+        fig = plt.figure(figsize=(12, 6))
         gs = fig.add_gridspec(2, 2, width_ratios=[2, 1])
-        ax_traj = fig.add_subplot(gs[:, 0])   # big left
-        ax_v = fig.add_subplot(gs[0, 1])      # top-right
-        ax_w = fig.add_subplot(gs[1, 1])      # bottom-right
 
-        # Redraw target traj
-        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Target")
-        current_line, = ax_traj.plot([], [], "r-", label="Current")
+        ax_traj = fig.add_subplot(gs[:, 0])   # trajectory big plot
+        ax_v    = fig.add_subplot(gs[0, 1])  # v subplot
+        ax_w    = fig.add_subplot(gs[1, 1])  # omega subplot
+
+        # ---- Trajectory plot ----
         ax_traj.set_title("Trajectory")
         ax_traj.set_xlabel("X")
         ax_traj.set_ylabel("Y")
+        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Target")
+        current_line, = ax_traj.plot([], [], "r-", label="Current")
         ax_traj.legend()
         ax_traj.set_aspect("equal", adjustable="datalim")
 
-        # v subplot
+        # ---- Control plots ----
         ax_v.set_title("Linear Velocity v")
         ax_v.set_xlabel("Time")
         ax_v.set_ylabel("v")
         line_v, = ax_v.plot([], [], "b-")
 
-        # omega subplot
         ax_w.set_title("Angular Velocity ω")
         ax_w.set_xlabel("Time")
         ax_w.set_ylabel("ω")
         line_w, = ax_w.plot([], [], "g-")
 
-        # --- Animation update function ---
+        # --- Update function ---
         def update(frame):
-            # Trajectory update
             current_line.set_data(self.current_states[:frame, 0], self.current_states[:frame, 1])
-
-            # v and w update
             line_v.set_data(t[:frame], self.control_actions[:frame, 0])
             line_w.set_data(t[:frame], self.control_actions[:frame, 1])
 
@@ -624,12 +602,8 @@ class PathPlanningFrenetFrame:
 
             return current_line, line_v, line_w
 
-        ani = animation.FuncAnimation(
-            fig, update, frames=n_frames, interval=interval, blit=False, repeat=False
-        )
-
+        ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval, blit=False, repeat=False)
         plt.show()
-        return ani
 
     def display_time(self, start, end):
         k = int(end - start)
@@ -642,6 +616,20 @@ class PathPlanningFrenetFrame:
 
 
 if __name__ == "__main__":
+    r'''
+    < ================= Main ================= >
+
+    Choose:
+        > robot dynamics - no. of trailers, direction of motion
+        > controller - mpc or other
+        > path - straight line, circle, ellipse, figure-eight
+
+    Specify:
+        > initial position of last trailer (offset)
+        > initial values of all angles ($\theta$, $\phi$)
+        > lengths of joining rods ($L$, $D$)
+    '''
+
     start = time.time()
     robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
     robot.diagnostics()
@@ -652,5 +640,5 @@ if __name__ == "__main__":
     trajectory.control_loop()
     trajectory.diagnostics()
     robot.diagnostics()
-    trajectory.plot()
     trajectory.display_time(start, time.time())
+    trajectory.plot()
