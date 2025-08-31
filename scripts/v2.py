@@ -1,7 +1,16 @@
 #!/Users/subhodeep/venv/bin/python
-
+import time
 import numpy as np
 from tabulate import tabulate
+from dataclasses import dataclass
+from typing import Tuple, Optional
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+try:
+    from scipy.optimize import minimize
+except ImportError as e:
+    raise ImportError("This controller requires SciPy for optimization: pip install scipy") from e
+
 '''
 How does it work? Framework outline:
 
@@ -66,6 +75,7 @@ How does it work? Framework outline:
 class CartesianFrenetConverter:
     pass
 
+
 class RobotDynamics:
     r'''
     Dynamics are given as follows:
@@ -85,7 +95,7 @@ class RobotDynamics:
         self.direction = direction
 
         self.mule_position = np.zeros(2)
-        self.mule_orientation = theta_list[0]
+        self.mule_orientation = self.theta_list[0]
         self.end_trailer_pose = offset
 
         self.control_actions = []
@@ -174,7 +184,7 @@ class RobotDynamics:
         self.mule_position = [x_mule_new, y_mule_new]
         self.mule_orientation = self.theta_list[0]
 
-        return self.mule_position
+        return np.append(np.asarray(self.mule_position), np.asarray(self.mule_orientation))
 
         # try:
         #     print(self.mule_position, self.calculate_mule_pose())
@@ -233,16 +243,14 @@ class RobotDynamics:
             print(f"Percentage Error in Mule pose: {error:.2f}%. Precautionary measures advised.")
 
 
-rd = RobotDynamics([0,0], [1.5, 1.5], [2.0, 2.0], [np.pi/4, np.pi/4], [np.pi/4, np.pi/4], trailer_count=2, direction=True)
-rd.diagnostics()
-for i in range(2):
-    rd.update_state([1, 0.01], 0.1)
-rd.diagnostics()
-
 class Path():
     '''
     Generates parametric paths. Also returns the path's curvature.
     '''
+    def __init__(self, shape):
+        self.shape = shape
+        self.obstacles = 0
+
     @staticmethod
     def circle(t, R=10.0, v=1.0):
         r'''
@@ -254,7 +262,7 @@ class Path():
         y = R * np.sin(omega * t)
         theta = np.arctan2(y, x) + np.pi / 2
         kappa = 1.0 / R
-        return x, y, theta, kappa
+        return x, y, theta
 
     @staticmethod
     def ellipse(t, a=12.0, b=8.0, v=1.0):
@@ -317,32 +325,197 @@ class Path():
         kappa = 0.0
         return x, y, theta, kappa
 
-
-class FeedbackController:
-    pass
-
-class MPC(FeedbackController):
-    pass
-
-class PID(FeedbackController):
-    pass
-
-class PP(FeedbackController):
-    pass
-
-class SMC(FeedbackController):
-    pass
-
-class RobotDynamics():
-    pass
+    def add_obstacle(self, *obstacles):
+        self.obstacles = obstacles
 
 
+def wrap_angle(a: float) -> float:
+    """Wrap angle to [-pi, pi]."""
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+@dataclass
+class MPCParams:
+    dt: float = 0.1                  # sampling time [s]
+    N: int = 15                      # prediction horizon
+    v_min: float = -0.8              # min linear velocity [m/s]
+    v_max: float = 1.0               # max linear velocity [m/s]
+    w_min: float = -2.5              # min angular velocity [rad/s]
+    w_max: float = 2.5               # max angular velocity [rad/s]
+    dv_max: float = 0.5              # max |Δv| per step [m/s]
+    dw_max: float = 1.0              # max |Δω| per step [rad/s]
+    # costs
+    q_xy: float = 2.0                # weight on (x,y) position error
+    q_th: float = 0.3                # weight on heading error
+    r_v: float = 0.02                # weight on absolute v
+    r_w: float = 0.02                # weight on absolute ω
+    s_v: float = 0.5                 # weight on |Δv|
+    s_w: float = 0.3                 # weight on |Δω|
+    qT_xy: float = 6.0               # terminal (x,y)
+    qT_th: float = 1.0               # terminal heading
+
+
+class UnicycleMPC:
+    """
+    Model Predictive Controller for a unicycle robot.
+    State:   x = [x, y, theta]
+    Control: u = [v, w]  (linear, angular)
+    Dynamics:
+        x_{k+1} = x_k + dt * [ v*cos(theta_k), v*sin(theta_k), w ]
+    """
+    def __init__(self, params: Optional[MPCParams] = None):
+        self.p = params or MPCParams()
+        # Keep last solution for warm-start
+        self._u_prev_seq = np.zeros(2 * self.p.N)  # [v0..vN-1, w0..wN-1]
+
+    # ----------------- public API -----------------
+    def control(self, x_now: np.ndarray, x_target: np.ndarray) -> Tuple[float, float]:
+        """
+        Compute the first control action (v, w).
+        x_now:     [x, y, theta]
+        x_target:  [x*, y*, theta*]  (theta* optional: if NaN, ignore heading error)
+        """
+        x_now = np.asarray(x_now, dtype=float).reshape(3)
+        x_ref = np.asarray(x_target, dtype=float).reshape(3)
+        theta_ref_valid = np.isfinite(x_ref[2])
+
+        # Warm start: shift previous optimal controls forward one step
+        u0 = self._warm_start()
+
+        # Box bounds on controls
+        bounds = [(self.p.v_min, self.p.v_max)] * self.p.N + [(self.p.w_min, self.p.w_max)] * self.p.N
+
+        # Build inequality constraints for slew-rate (Δu) limits: |u_k - u_{k-1}| <= d_max
+        A_ineq, b_ineq = self._delta_constraints()
+
+        cons = []
+        if A_ineq is not None:
+            cons.append({
+                "type": "ineq",
+                "fun": lambda u, A=A_ineq, b=b_ineq: b - A @ u
+            })
+
+        # Objective
+        def objective(u: np.ndarray) -> float:
+            v_seq = u[:self.p.N]
+            w_seq = u[self.p.N:]
+            # simulate
+            traj = self._rollout(x_now, v_seq, w_seq)
+            # stage costs
+            pos_err = traj[:, :2] - x_ref[:2]          # (N+1, 2)
+            e_xy2 = np.sum(pos_err**2, axis=1)        # (N+1,)
+            if theta_ref_valid:
+                e_th = np.array([wrap_angle(th - x_ref[2]) for th in traj[:, 2]])
+                e_th2 = e_th**2
+            else:
+                e_th2 = np.zeros(self.p.N + 1)
+
+            # smoothness (Δu) and effort
+            dv = np.diff(v_seq, prepend=v_seq[0])
+            dw = np.diff(w_seq, prepend=w_seq[0])
+
+            J_stage = np.sum(self.p.q_xy * e_xy2[:-1] + self.p.q_th * e_th2[:-1]
+                             + self.p.r_v * (v_seq**2) + self.p.r_w * (w_seq**2)
+                             + self.p.s_v * (np.abs(dv)) + self.p.s_w * (np.abs(dw)))
+
+            # terminal
+            J_term = self.p.qT_xy * e_xy2[-1] + self.p.qT_th * e_th2[-1]
+            return J_stage + J_term
+
+        res = minimize(
+            objective, u0, method="SLSQP", bounds=bounds, constraints=cons,
+            options={"maxiter": 100, "ftol": 1e-4, "disp": False}
+        )
+
+        u_opt = res.x if res.success else u0
+        self._u_prev_seq = u_opt.copy()
+
+        v_cmd = float(np.clip(u_opt[0], self.p.v_min, self.p.v_max))
+        w_cmd = float(np.clip(u_opt[self.p.N], self.p.w_min, self.p.w_max))
+        return [v_cmd, w_cmd]
+
+    # ----------------- helpers -----------------
+    def _rollout(self, x0: np.ndarray, v_seq: np.ndarray, w_seq: np.ndarray) -> np.ndarray:
+        """Simulate N steps; return (N+1, 3) states including x0."""
+        dt = self.p.dt
+        x = x0.copy()
+        traj = [x.copy()]
+        for k in range(self.p.N):
+            v = v_seq[k]
+            w = w_seq[k]
+            x[0] = x[0] + dt * v * np.cos(x[2])
+            x[1] = x[1] + dt * v * np.sin(x[2])
+            x[2] = wrap_angle(x[2] + dt * w)
+            traj.append(x.copy())
+        return np.vstack(traj)
+
+    def _warm_start(self) -> np.ndarray:
+        """Shift previous sequence forward; keep last value for the tail."""
+        u = self._u_prev_seq
+        N = self.p.N
+        v_seq = u[:N]
+        w_seq = u[N:]
+        v_ws = np.r_[v_seq[1:], v_seq[-1]]
+        w_ws = np.r_[w_seq[1:], w_seq[-1]]
+        return np.r_[v_ws, w_ws]
+
+    def _delta_constraints(self):
+        """
+        Build |Δv_k|<=dv_max, |Δw_k|<=dw_max as linear inequalities:
+            -dv_max <= v_k - v_{k-1} <= dv_max   (similar for w)
+        SLSQP accepts A u <= b. We express both sides by stacking.
+        Use first element relative to previous optimal first element (fixed at itself -> no constraint tightening).
+        """
+        N = self.p.N
+        dv = self.p.dv_max
+        dw = self.p.dw_max
+        if not np.isfinite(dv) and not np.isfinite(dw):
+            return None, None
+
+        # Variables: u = [v0..vN-1, w0..wN-1]
+        dim = 2 * N
+        rows = []
+        rhs = []
+
+        # v deltas
+        if np.isfinite(dv):
+            # k=0: we don't constrain against unknown previous command; instead cap |v0| change by bounds already.
+            for k in range(1, N):
+                row = np.zeros(dim)
+                row[k] = 1.0      # v_k
+                row[k - 1] = -1.0 # -v_{k-1}
+                rows.append(row.copy());  rhs.append(dv)   #  v_k - v_{k-1} <= dv
+                rows.append(-row.copy()); rhs.append(dv)   # -v_k + v_{k-1} <= dv  => -(v_k - v_{k-1}) <= dv
+
+        # w deltas
+        if np.isfinite(dw):
+            offset = N
+            for k in range(1, N):
+                row = np.zeros(dim)
+                row[offset + k] = 1.0
+                row[offset + k - 1] = -1.0
+                rows.append(row.copy());  rhs.append(dw)
+                rows.append(-row.copy()); rhs.append(dw)
+
+        if not rows:
+            return None, None
+        A = np.vstack(rows)
+        b = np.asarray(rhs)
+        return A, b
+
+
+@dataclass
 class Obstacle():
-    pass
+    x: float
+    y: float
+    radius: float
 
 
 class PathPlanningFrenetFrame:
-    def __init__(self, T, dt):
+    def __init__(self, robot, target_path, controller, T, dt):
+        self.robot = robot
+        self.target_path = target_path
+        self.controller = controller
         self.T = T
         self.dt = dt
 
@@ -354,26 +527,147 @@ class PathPlanningFrenetFrame:
         self.target_states_frenet = []
         self.control_actions_frenet = []
 
-        self.control_loop()
-        self.plot()
-
     def control_loop(self):
-        robot = RobotDynamics([0,0], [1.5], [2.0], [np.pi/4], [np.pi/4], trailer_count=1, direction=True)
-        current_state = robot.mule_position
+        current_state = np.append(self.robot.mule_position, self.robot.mule_orientation)
+        # self.current_states.append(current_state)
         for t in np.arange(0, self.T, self.dt):
             target_state = Path.circle(t)
-            control_action = FeedbackController.mpc(current_state, target_state)
-            updated_state = robot.update_state(control_action)
+            control_action = self.controller.control(current_state, target_state)
+            updated_state = robot.update_state(control_action, self.dt)
             current_state = updated_state
-            self.store(current_state, target_state, control_action)
+            self.current_states.append(current_state)
+            self.target_states.append(target_state)
+            self.control_actions.append(control_action)
 
-    def store(self, current_state, target_state, control_action):
-        self.current_states.append(current_state)
-        self.target_states.append(target_state)
-        self.control_actions.append(control_action)
+    def diagnostics(self):
+        r'''
+        Displays control step in tabular format
+        +---------------------+-----------------------+-------------------+---....
+        |     Current Pose    |      Target Pose      |   Control Action  |
+        +=====================+=======================+===================+===....
+        | [$x_{mule}$, $y_{mule}$, $\theta_{mule}$] | [$x_{target}$, $y_{target}$, $\theta_{target}$] |       [$v$, $\omega$]      |
+        +---------------------+-----------------------+-------------------+---....
+        '''
+        headers = ["Sl. no"] + ["Current Pose"] + ["Target Pose"] + ["Control Action"]
+        rows = []
+        for i in range(int(self.T / self.dt)):
+            row = [
+                i + 1,
+                [f"{x:.4f}" for x in np.array(self.current_states[i]).flatten()],
+                [f"{x:.4f}" for x in np.array(self.target_states[i]).flatten()],
+                [f"{x:.4f}" for x in np.array(self.control_actions[i]).flatten()]
+            ]
+            rows.append(row)
+        print(tabulate(rows, headers, tablefmt='grid'))
 
-    def plot(self):
-        pass
+    def plot(self, interval=100):
+        """
+        Animate target vs current trajectory and control inputs.
+
+        Args:
+            target_states (list of [x,y,theta]): target trajectory
+            current_states (list of [x,y,theta]): current trajectory
+            control_actions (list of [v, omega]): control inputs
+            interval (int): delay between frames in ms
+        """
+
+        # Convert to numpy arrays
+        self.target_states = np.array(self.target_states)
+        self.current_states = np.array(self.current_states)
+        self.control_actions = np.array(self.control_actions)
+
+        n_frames = min(len(self.target_states), len(self.current_states), len(self.control_actions))
+        t = np.arange(n_frames)
+
+        # --- Figure and axes ---
+        fig, (ax_traj, ax_ctrls) = plt.subplots(1, 2, figsize=(12, 6))
+
+        # ---- Left plot (trajectory) ----
+        ax_traj.set_title("Trajectory")
+        ax_traj.set_xlabel("X")
+        ax_traj.set_ylabel("Y")
+
+        # plot full target path as dotted line
+        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Target")
+        current_line, = ax_traj.plot([], [], "r-", label="Current")
+
+        ax_traj.legend()
+        ax_traj.set_aspect("equal", adjustable="datalim")
+
+        # ---- Right plot (controls: v and omega) ----
+        ax_v = ax_ctrls.twinx()  # Create second axis if needed OR use subplots inside ax_ctrls
+        fig.subplots_adjust(wspace=0.4)
+
+        # Instead: make 2 vertical subplots on right
+        fig.clf()
+        gs = fig.add_gridspec(2, 2, width_ratios=[2, 1])
+        ax_traj = fig.add_subplot(gs[:, 0])   # big left
+        ax_v = fig.add_subplot(gs[0, 1])      # top-right
+        ax_w = fig.add_subplot(gs[1, 1])      # bottom-right
+
+        # Redraw target traj
+        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Target")
+        current_line, = ax_traj.plot([], [], "r-", label="Current")
+        ax_traj.set_title("Trajectory")
+        ax_traj.set_xlabel("X")
+        ax_traj.set_ylabel("Y")
+        ax_traj.legend()
+        ax_traj.set_aspect("equal", adjustable="datalim")
+
+        # v subplot
+        ax_v.set_title("Linear Velocity v")
+        ax_v.set_xlabel("Time")
+        ax_v.set_ylabel("v")
+        line_v, = ax_v.plot([], [], "b-")
+
+        # omega subplot
+        ax_w.set_title("Angular Velocity ω")
+        ax_w.set_xlabel("Time")
+        ax_w.set_ylabel("ω")
+        line_w, = ax_w.plot([], [], "g-")
+
+        # --- Animation update function ---
+        def update(frame):
+            # Trajectory update
+            current_line.set_data(self.current_states[:frame, 0], self.current_states[:frame, 1])
+
+            # v and w update
+            line_v.set_data(t[:frame], self.control_actions[:frame, 0])
+            line_w.set_data(t[:frame], self.control_actions[:frame, 1])
+
+            ax_traj.relim(); ax_traj.autoscale_view()
+            ax_v.relim(); ax_v.autoscale_view()
+            ax_w.relim(); ax_w.autoscale_view()
+
+            return current_line, line_v, line_w
+
+        ani = animation.FuncAnimation(
+            fig, update, frames=n_frames, interval=interval, blit=False, repeat=False
+        )
+
+        plt.show()
+        return ani
+
+    def display_time(self, start, end):
+        k = int(end - start)
+        mins = (k // 60)
+        if end - start < 1:
+            secs = (((end - start) * 10000) // 100) / 100
+        else:
+            secs = k - (mins * 60)
+        print(f"Time taken: {mins} minutes {secs} seconds")
 
 
-# trajectory = PathPlanningFrenetFrame(60, 0.1)
+if __name__ == "__main__":
+    start = time.time()
+    robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
+    robot.diagnostics()
+    mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
+    circle = Path("circle")
+    # circle.add_obstacles()
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=65, dt=0.1)
+    trajectory.control_loop()
+    trajectory.diagnostics()
+    robot.diagnostics()
+    trajectory.plot()
+    trajectory.display_time(start, time.time())
