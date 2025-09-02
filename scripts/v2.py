@@ -281,6 +281,7 @@ class Path():
         r'''
         Generates a circle path and its kinematic properties.
         Returns: $x$, $y$, $\theta$ (heading), $\kappa$ (curvature)
+        • reaches back at starting point at $t = R * 2\pi$ (62.8)
         '''
         omega = v / R
         x = R * np.cos(omega * t)
@@ -642,6 +643,7 @@ class PathPlanningFrenetFrame:
 
         # ---- Hitch & Trailer plots ----
         n_pairs = self.hitches.shape[1]
+        mule_scats = [ax_traj.plot([], [], "ro", label=f"Mule")[0]]
         hitch_scats = [ax_traj.plot([], [], "bo", label=f"Hitch {i+1}" if i == 0 else "")[0]
                     for i in range(n_pairs)]
         trailer_scats = [ax_traj.plot([], [], "go", label=f"Trailer {i+1}" if i == 0 else "")[0]
@@ -656,17 +658,21 @@ class PathPlanningFrenetFrame:
 
             # hitches & trailers
             for i in range(n_pairs):
+                mx, my = self.current_states[frame-1:frame, 0], self.current_states[frame-1:frame, 1]
                 hx, hy = self.hitches[frame, i]
                 tx, ty = self.trailers[frame, i]
+                mule_scats[i].set_data([mx], [my])
                 hitch_scats[i].set_data([hx], [hy])
                 trailer_scats[i].set_data([tx], [ty])
 
             # rescale
-            ax_traj.relim(); ax_traj.autoscale_view()
+            # ax_traj.relim(); ax_traj.autoscale_view()
+            ax_traj.set_xlim(-12, 12)
+            ax_traj.set_ylim(-12, 12)
             ax_v.relim(); ax_v.autoscale_view()
             ax_w.relim(); ax_w.autoscale_view()
 
-            return [current_line, line_v, line_w] + hitch_scats + trailer_scats
+            return [current_line, line_v, line_w] + mule_scats + hitch_scats + trailer_scats
 
         ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval,
                                     blit=False, repeat=False)
@@ -698,14 +704,15 @@ if __name__ == "__main__":
     '''
 
     start = time.time()
-    robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
+    # robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
+    robot = RobotDynamics([10,-3.5], [1.5], [2.0], [np.pi/2], [np.pi/2], trailer_count=1, direction=True)
     robot.diagnostics()
     mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
     circle = Path("circle")
     # circle.add_obstacles()
-    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=15, dt=0.1)
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=10, dt=0.1)
     trajectory.control_loop()
-    # trajectory.diagnostics()
+    trajectory.diagnostics()
     robot.diagnostics()
     trajectory.display_time(start, time.time())
     trajectory.plot()
