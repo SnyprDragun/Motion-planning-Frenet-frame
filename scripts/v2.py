@@ -1,6 +1,7 @@
 #!/Users/subhodeep/venv/bin/python
 import time
 import numpy as np
+from tqdm import tqdm
 from tabulate import tabulate
 from dataclasses import dataclass
 from typing import Tuple, Optional
@@ -128,7 +129,7 @@ class RobotDynamics:
         self.mule_position += self.end_trailer_pose
         return self.mule_position.tolist()
 
-    def calculate_kth_hitch_trailer_pose(self, k):
+    def calculate_kth_hitch_trailer_pose_from_back(self, k):
         r'''
         If $(x_{trailer, N}, y_{trailer, N})$ is position of last trailer of the robot, $k^{th}$ hitch and trailer position is calculated as:
             (assuming hitch-trailers are numbered $1$ to $N$, from mule to last trailer, and there are total $N$ hitch-trailer pairs)
@@ -147,6 +148,33 @@ class RobotDynamics:
 
             xi_hitch = xi_trailer + self.L_list[k-1] * np.cos(self.theta_list[k-1])
             yi_hitch = yi_trailer + self.L_list[k-1] * np.sin(self.theta_list[k-1])
+
+            return [xi_hitch, yi_hitch], [xi_trailer, yi_trailer]
+
+        except IndexError:
+            print(f"ERROR: Robot has only {self.trailer_count} hitch-trailers, you are aksing pose for {k}")
+            print("Proceeding with last hitch-trailer pose...")
+            return self.calculate_kth_hitch_trailer_pose(self.trailer_count)
+
+    def calculate_kth_hitch_trailer_pose(self, k):
+        r'''
+        If $(x_{mule}, y_{mule})$ is position of the mule, $k^{th}$ hitch and trailer position is calculated as:
+            (assuming hitch-trailers are numbered $1$ to $N$, from mule to last trailer, and there are total $N$ hitch-trailer pairs)
+
+            $x_{trailer, k} = x_{mule} - \sum_{i=1}^{k} D_{i}\cos(\phi_{i}) + L_{i}\cos(\theta_{i})$ and $y_{trailer, k} = y_{mule} - \sum_{i=1}^{k} D_{i}\sin(\phi_{i}) + L_{i}\sin(\theta_{i})$
+
+            $x_{hitch, k} = x_{trailer, k} + D_{k}\cos(\phi_{k})$ and $y_{hitch, k} = y_{trailer, k} + D_{k}\sin(\phi_{k})$
+        '''
+        xi_trailer, yi_trailer = self.mule_position
+        xi_hitch, yi_hitch = 0, 0
+
+        try:
+            for i in range(0, k):
+                xi_trailer -= self.D_list[i] * np.cos(self.phi_list[i]) + self.L_list[i] * np.cos(self.theta_list[i])
+                yi_trailer -= self.D_list[i] * np.sin(self.phi_list[i]) + self.L_list[i] * np.sin(self.theta_list[i])
+
+            xi_hitch = xi_trailer + self.L_list[k - 1] * np.cos(self.theta_list[k - 1])
+            yi_hitch = yi_trailer + self.L_list[k - 1] * np.sin(self.theta_list[k - 1])
 
             return [xi_hitch, yi_hitch], [xi_trailer, yi_trailer]
 
@@ -518,17 +546,37 @@ class PathPlanningFrenetFrame:
         self.target_states = []
         self.control_actions = []
 
+        self.hitches = []
+        self.trailers = []
+
         self.current_states_frenet = []
         self.target_states_frenet = []
         self.control_actions_frenet = []
 
+    def store_hitch_trailer(self):
+        hitches = []
+        trailers = []
+
+        for i in range(self.robot.trailer_count):
+            hitch, trailer = self.robot.calculate_kth_hitch_trailer_pose(i+1)
+            hitches.append(hitch)
+            trailers.append(trailer)
+
+        self.hitches.append(hitches)
+        self.trailers.append(trailers)
+
     def control_loop(self):
         current_state = np.append(self.robot.mule_position, self.robot.mule_orientation)
-        for t in np.arange(0, self.T, self.dt):
+
+        for i in tqdm(range(int(self.T / self.dt)), desc="Simulating", unit="iterations"):
+            t = i * self.dt
+
             target_state = Path.circle(t)
             control_action = self.controller.control(current_state, target_state)
             updated_state = robot.update_state(control_action, self.dt)
             current_state = updated_state
+
+            self.store_hitch_trailer()
             self.current_states.append(current_state)
             self.target_states.append(target_state)
             self.control_actions.append(control_action)
@@ -558,6 +606,8 @@ class PathPlanningFrenetFrame:
         self.target_states = np.array(self.target_states)
         self.current_states = np.array(self.current_states)
         self.control_actions = np.array(self.control_actions)
+        self.hitches = np.array(self.hitches)
+        self.trailers = np.array(self.trailers)
 
         n_frames = int(self.T / self.dt)
         t = np.arange(n_frames)
@@ -590,19 +640,36 @@ class PathPlanningFrenetFrame:
         ax_w.set_ylabel("ω")
         line_w, = ax_w.plot([], [], "g-")
 
+        # ---- Hitch & Trailer plots ----
+        n_pairs = self.hitches.shape[1]
+        hitch_scats = [ax_traj.plot([], [], "bo", label=f"Hitch {i+1}" if i == 0 else "")[0]
+                    for i in range(n_pairs)]
+        trailer_scats = [ax_traj.plot([], [], "go", label=f"Trailer {i+1}" if i == 0 else "")[0]
+                        for i in range(n_pairs)]
+
         # --- Update function ---
         def update(frame):
+            # trajectory + control
             current_line.set_data(self.current_states[:frame, 0], self.current_states[:frame, 1])
             line_v.set_data(t[:frame], self.control_actions[:frame, 0])
             line_w.set_data(t[:frame], self.control_actions[:frame, 1])
 
+            # hitches & trailers
+            for i in range(n_pairs):
+                hx, hy = self.hitches[frame, i]
+                tx, ty = self.trailers[frame, i]
+                hitch_scats[i].set_data([hx], [hy])
+                trailer_scats[i].set_data([tx], [ty])
+
+            # rescale
             ax_traj.relim(); ax_traj.autoscale_view()
             ax_v.relim(); ax_v.autoscale_view()
             ax_w.relim(); ax_w.autoscale_view()
 
-            return current_line, line_v, line_w
+            return [current_line, line_v, line_w] + hitch_scats + trailer_scats
 
-        ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval, blit=False, repeat=False)
+        ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval,
+                                    blit=False, repeat=False)
         plt.show()
 
     def display_time(self, start, end):
@@ -636,9 +703,9 @@ if __name__ == "__main__":
     mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
     circle = Path("circle")
     # circle.add_obstacles()
-    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=65, dt=0.1)
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=15, dt=0.1)
     trajectory.control_loop()
-    trajectory.diagnostics()
+    # trajectory.diagnostics()
     robot.diagnostics()
     trajectory.display_time(start, time.time())
     trajectory.plot()
