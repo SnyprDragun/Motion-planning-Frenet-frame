@@ -129,33 +129,6 @@ class RobotDynamics:
         self.mule_position += self.end_trailer_pose
         return self.mule_position.tolist()
 
-    def calculate_kth_hitch_trailer_pose_from_back(self, k):
-        r'''
-        If $(x_{trailer, N}, y_{trailer, N})$ is position of last trailer of the robot, $k^{th}$ hitch and trailer position is calculated as:
-            (assuming hitch-trailers are numbered $1$ to $N$, from mule to last trailer, and there are total $N$ hitch-trailer pairs)
-
-            $x_{trailer, k} = \sum_{i=k}^{N} D_{i}\cos(\phi_{i}) + L_{i}\cos(\theta_{i})$ and $y_{trailer, k} = \sum_{i=k}^{N} D_{i}\sin(\phi_{i}) + L_{i}\sin(\theta_{i})$
-
-            $x_{hitch, k} = x_{trailer, k} + D_{k-1}\cos(\phi_{k-1})$ and $y_{hitch, k} = y_{trailer, k} + D_{k-1}\sin(\phi_{k-1})$
-        '''
-        xi_trailer, yi_trailer = self.end_trailer_pose
-        xi_hitch, yi_hitch = 0, 0
-
-        try:
-            for i in range(self.trailer_count - 1, k-1, -1):
-                xi_trailer += self.D_list[i] * np.cos(self.phi_list[i]) + self.L_list[i] * np.cos(self.theta_list[i])
-                yi_trailer += self.D_list[i] * np.sin(self.phi_list[i]) + self.L_list[i] * np.sin(self.theta_list[i])
-
-            xi_hitch = xi_trailer + self.L_list[k-1] * np.cos(self.theta_list[k-1])
-            yi_hitch = yi_trailer + self.L_list[k-1] * np.sin(self.theta_list[k-1])
-
-            return [xi_hitch, yi_hitch], [xi_trailer, yi_trailer]
-
-        except IndexError:
-            print(f"ERROR: Robot has only {self.trailer_count} hitch-trailers, you are aksing pose for {k}")
-            print("Proceeding with last hitch-trailer pose...")
-            return self.calculate_kth_hitch_trailer_pose(self.trailer_count)
-
     def calculate_kth_hitch_trailer_pose(self, k):
         r'''
         If $(x_{mule}, y_{mule})$ is position of the mule, $k^{th}$ hitch and trailer position is calculated as:
@@ -169,12 +142,12 @@ class RobotDynamics:
         xi_hitch, yi_hitch = 0, 0
 
         try:
-            for i in range(0, k):
+            for i in range(k):
                 xi_trailer -= self.D_list[i] * np.cos(self.phi_list[i]) + self.L_list[i] * np.cos(self.theta_list[i])
                 yi_trailer -= self.D_list[i] * np.sin(self.phi_list[i]) + self.L_list[i] * np.sin(self.theta_list[i])
 
-            xi_hitch = xi_trailer + self.L_list[k - 1] * np.cos(self.theta_list[k - 1])
-            yi_hitch = yi_trailer + self.L_list[k - 1] * np.sin(self.theta_list[k - 1])
+            xi_hitch = xi_trailer + self.D_list[k - 1] * np.cos(self.phi_list[k - 1])
+            yi_hitch = yi_trailer + self.D_list[k - 1] * np.sin(self.phi_list[k - 1])
 
             return [xi_hitch, yi_hitch], [xi_trailer, yi_trailer]
 
@@ -207,7 +180,7 @@ class RobotDynamics:
 
         v_ht , omega_ht = v, omega
         for i in range(self.trailer_count):
-            _, trailer_old = self.calculate_kth_hitch_trailer_pose(i+1)
+            _, trailer_old = self.calculate_kth_hitch_trailer_pose(i + 1)
             x_trailer_new = trailer_old[0] + self.v_trailer(v_ht, omega_ht, i) * np.cos(self.phi_list[i]) * dt
             y_trailer_new = trailer_old[1] + self.v_trailer(v_ht, omega_ht, i) * np.sin(self.phi_list[i]) * dt
 
@@ -232,13 +205,13 @@ class RobotDynamics:
         r'''
         $v_{t, i} = v\cos(\theta_{i}-\phi_{i}) + L_{i}\omega\sin(\theta_{i}-\phi_{i})$
         '''
-        return v * np.cos(self.phi_list[i] - self.theta_list[i]) + self.L_list[i] * omega * np.sin(self.phi_list[i] - self.theta_list[i])
+        return v * np.cos(self.theta_list[i] - self.phi_list[i]) + self.L_list[i] * omega * np.sin(self.theta_list[i] - self.phi_list[i])
 
     def phi_dot(self, v, omega, i):
         r'''
         $\dot\phi_{t, i} = \frac{v\sin(\theta_{i}-\phi_{i}) - L_{i}\omega\cos(\theta_{i}-\phi_{i})}{D_{i}}$
         '''
-        return (v * np.sin(self.phi_list[i] - self.theta_list[i]) - self.L_list[i] * omega * np.cos(self.phi_list[i] - self.theta_list[i])) / self.D_list[i]
+        return (v * np.sin(self.theta_list[i] - self.phi_list[i]) - self.L_list[i] * omega * np.cos(self.theta_list[i] - self.phi_list[i])) / self.D_list[i]
 
     def omega_next(self, v_ht, phi_dot, i):
         r'''
@@ -559,7 +532,7 @@ class PathPlanningFrenetFrame:
         trailers = []
 
         for i in range(self.robot.trailer_count):
-            hitch, trailer = self.robot.calculate_kth_hitch_trailer_pose(i+1)
+            hitch, trailer = self.robot.calculate_kth_hitch_trailer_pose(i + 1)
             hitches.append(hitch)
             trailers.append(trailer)
 
@@ -666,16 +639,13 @@ class PathPlanningFrenetFrame:
                 trailer_scats[i].set_data([tx], [ty])
 
             # rescale
-            # ax_traj.relim(); ax_traj.autoscale_view()
-            ax_traj.set_xlim(-12, 12)
-            ax_traj.set_ylim(-12, 12)
+            ax_traj.relim(); ax_traj.autoscale_view()
             ax_v.relim(); ax_v.autoscale_view()
             ax_w.relim(); ax_w.autoscale_view()
 
             return [current_line, line_v, line_w] + mule_scats + hitch_scats + trailer_scats
 
-        ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval,
-                                    blit=False, repeat=False)
+        ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval, blit=False, repeat=False)
         plt.show()
 
     def display_time(self, start, end):
@@ -705,12 +675,13 @@ if __name__ == "__main__":
 
     start = time.time()
     # robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
+    # robot = RobotDynamics([-3.5*np.pi/4, -3.5*np.pi/4], [1.5], [2.0], [np.pi/4], [np.pi/4], trailer_count=1, direction=True)
     robot = RobotDynamics([10,-3.5], [1.5], [2.0], [np.pi/2], [np.pi/2], trailer_count=1, direction=True)
     robot.diagnostics()
     mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
     circle = Path("circle")
     # circle.add_obstacles()
-    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=10, dt=0.1)
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=63, dt=0.1)
     trajectory.control_loop()
     trajectory.diagnostics()
     robot.diagnostics()
