@@ -612,15 +612,13 @@ class PathPlanningFrenetFrame:
         n_frames = int(self.T / self.dt)
         t = np.arange(n_frames)
 
-        # --- Create layout with gridspec: big traj on left, two stacked on right
         fig = plt.figure(figsize=(12, 6))
         gs = fig.add_gridspec(2, 2, width_ratios=[2, 1])
+        ax_traj = fig.add_subplot(gs[:, 0])
+        ax_v = fig.add_subplot(gs[0, 1])
+        ax_w = fig.add_subplot(gs[1, 1])
 
-        ax_traj = fig.add_subplot(gs[:, 0])   # trajectory big plot
-        ax_v    = fig.add_subplot(gs[0, 1])  # v subplot
-        ax_w    = fig.add_subplot(gs[1, 1])  # omega subplot
-
-        # ---- Trajectory plot ----
+        # ---- Trajectory plot ---- #
         ax_traj.set_title("Trajectory")
         ax_traj.set_xlabel("X")
         ax_traj.set_ylabel("Y")
@@ -629,7 +627,7 @@ class PathPlanningFrenetFrame:
         ax_traj.legend()
         ax_traj.set_aspect("equal", adjustable="datalim")
 
-        # ---- Control plots ----
+        # ---- Control plots ---- #
         ax_v.set_title("Linear Velocity v")
         ax_v.set_xlabel("Time")
         ax_v.set_ylabel("v")
@@ -640,22 +638,17 @@ class PathPlanningFrenetFrame:
         ax_w.set_ylabel("ω")
         line_w, = ax_w.plot([], [], "g-")
 
-        # ---- Hitch & Trailer plots ----
+        # ---- Hitch & Trailer plots ---- #
         n_pairs = self.hitches.shape[1]
         mule_scats = [ax_traj.plot([], [], "ro", label=f"Mule")[0]]
-        hitch_scats = [ax_traj.plot([], [], "bo", label=f"Hitch {i+1}" if i == 0 else "")[0]
-                    for i in range(n_pairs)]
-        trailer_scats = [ax_traj.plot([], [], "go", label=f"Trailer {i+1}" if i == 0 else "")[0]
-                        for i in range(n_pairs)]
+        hitch_scats = [ax_traj.plot([], [], "bo", label=f"Hitch {i+1}" if i == 0 else "")[0] for i in range(n_pairs)]
+        trailer_scats = [ax_traj.plot([], [], "go", label=f"Trailer {i+1}" if i == 0 else "")[0] for i in range(n_pairs)]
 
-        # --- Update function ---
         def update(frame):
-            # trajectory + control
             current_line.set_data(self.current_states[:frame, 0], self.current_states[:frame, 1])
             line_v.set_data(t[:frame], self.control_actions[:frame, 0])
             line_w.set_data(t[:frame], self.control_actions[:frame, 1])
 
-            # hitches & trailers
             for i in range(n_pairs):
                 mx, my = self.current_states[frame-1:frame, 0], self.current_states[frame-1:frame, 1]
                 hx, hy = self.hitches[frame, i]
@@ -664,7 +657,6 @@ class PathPlanningFrenetFrame:
                 hitch_scats[i].set_data([hx], [hy])
                 trailer_scats[i].set_data([tx], [ty])
 
-            # rescale
             ax_traj.relim(); ax_traj.autoscale_view()
             ax_v.relim(); ax_v.autoscale_view()
             ax_w.relim(); ax_w.autoscale_view()
