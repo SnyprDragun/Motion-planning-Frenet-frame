@@ -178,8 +178,13 @@ class RobotDynamics:
         x_mule_new = self.mule_position[0] + v * np.cos(self.theta_list[0]) * dt
         y_mule_new = self.mule_position[1] + v * np.sin(self.theta_list[0]) * dt
 
+        new_theta_list = self.theta_list
+        new_phi_list = self.phi_list
         v_ht , omega_ht = v, omega
+        v_ht_new, omega_ht_new = 0, 0
+
         for i in range(self.trailer_count):
+            self.control_actions.append([v_ht, omega_ht])
             _, trailer_old = self.calculate_kth_hitch_trailer_pose(i + 1)
             x_trailer_new = trailer_old[0] + self.v_trailer(v_ht, omega_ht, i) * np.cos(self.phi_list[i]) * dt
             y_trailer_new = trailer_old[1] + self.v_trailer(v_ht, omega_ht, i) * np.sin(self.phi_list[i]) * dt
@@ -187,15 +192,17 @@ class RobotDynamics:
             if i == self.trailer_count - 1:
                 self.end_trailer_pose = [x_trailer_new, y_trailer_new]
 
-            self.control_actions.append([v_ht, omega_ht])
-            v_ht = self.v_trailer(v_ht, omega_ht, i)
+            if i > 0:
+                omega_ht_new = self.omega_next(v_ht, self.phi_dot(v_ht, omega_ht, i), i)
+                v_ht_new = self.v_trailer(v_ht, omega_ht, i)
+                omega_ht = omega_ht_new
+                v_ht = v_ht_new
 
-            if i > 1:
-                omega_ht = self.omega_next(v_ht, self.phi_dot(v_ht, omega_ht, i), i)
+            new_theta_list[i] += omega_ht * dt
+            new_phi_list[i] += self.phi_dot(v_ht, omega_ht, i) * dt
 
-            self.theta_list[i] += omega_ht * dt
-            self.phi_list[i] += self.phi_dot(v_ht, omega_ht, i) * dt
-
+        self.theta_list = new_theta_list
+        self.phi_list = new_phi_list
         self.mule_position = [x_mule_new, y_mule_new]
         self.mule_orientation = self.theta_list[0]
 
@@ -215,9 +222,9 @@ class RobotDynamics:
 
     def omega_next(self, v_ht, phi_dot, i):
         r'''
-        $\dot\omega_{i} = \frac{v_{i} \sin(\phi_{i-1} - \theta_{i}) - D_{i-1} \dot\phi_{i-1} \cos(\phi_{i-1} - \theta_{i})}{L{i}}$
+        $\omega_{i} = \frac{v_{hitch, i-1} \sin(\phi_{i-1} - \theta_{i}) - D_{i-1} \dot\phi_{i-1} \cos(\phi_{i-1} - \theta_{i})}{L{i}}$
         '''
-        return (v_ht * np.sin(self.phi_list[i] - self.theta_list[i+1]) - self.D_list[i] * phi_dot * np.cos(self.phi_list[i] - self.theta_list[i+1])) / self.L_list[i+1]
+        return (v_ht * np.sin(self.phi_list[i-1] - self.theta_list[i]) - self.D_list[i-1] * phi_dot * np.cos(self.phi_list[i-1] - self.theta_list[i])) / self.L_list[i]
 
     def diagnostics(self):
         r'''
@@ -634,7 +641,7 @@ class PathPlanningFrenetFrame:
                 mx, my = self.current_states[frame-1:frame, 0], self.current_states[frame-1:frame, 1]
                 hx, hy = self.hitches[frame, i]
                 tx, ty = self.trailers[frame, i]
-                mule_scats[i].set_data([mx], [my])
+                mule_scats[0].set_data([mx], [my])
                 hitch_scats[i].set_data([hx], [hy])
                 trailer_scats[i].set_data([tx], [ty])
 
@@ -674,16 +681,17 @@ if __name__ == "__main__":
     '''
 
     start = time.time()
+    robot = RobotDynamics([10,-10.5], [1.5, 1.5, 1.5], [2.0, 2.0, 2.0], [np.pi/2, np.pi/2, np.pi/2], [np.pi/2, np.pi/2, np.pi/2], trailer_count=3, direction=True)
     # robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
     # robot = RobotDynamics([-3.5*np.pi/4, -3.5*np.pi/4], [1.5], [2.0], [np.pi/4], [np.pi/4], trailer_count=1, direction=True)
-    robot = RobotDynamics([10,-3.5], [1.5], [2.0], [np.pi/2], [np.pi/2], trailer_count=1, direction=True)
+    # robot = RobotDynamics([10,-3.5], [1.5], [2.0], [np.pi/2], [np.pi/2], trailer_count=1, direction=True)
     robot.diagnostics()
     mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
     circle = Path("circle")
     # circle.add_obstacles()
-    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=63, dt=0.1)
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=65, dt=0.1)
     trajectory.control_loop()
-    trajectory.diagnostics()
+    # trajectory.diagnostics()
     robot.diagnostics()
     trajectory.display_time(start, time.time())
     trajectory.plot()
