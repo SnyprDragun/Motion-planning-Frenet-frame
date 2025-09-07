@@ -252,8 +252,14 @@ class Path():
     Parametric functions to generate path points. Also handles obstcale avoidance. 
     Returns. safe and optimal path point for traversal
     '''
-    def __init__(self, shape):
+    def __init__(self, shape, R=10.0, a=12.0, b=8.0, slope=0.0, intercept=0.0, v=1.0):
         self.shape = shape
+        self.R = R
+        self.a = a
+        self.b = b
+        self.slope = slope
+        self.intercept = intercept
+        self.v = v
         self.obstacles = 0
 
     @staticmethod
@@ -330,6 +336,19 @@ class Path():
         theta = np.arctan2(slope, 1.0)
         kappa = 0.0
         return x, y, theta
+
+    def equation(self, t):
+        try:
+            if self.shape == "circle":
+                return Path.circle(t, R=self.R, v=self.v)
+            elif self.shape == "ellipse":
+                return Path.ellipse(t, a=self.a, b=self.b, v=self.v)
+            elif self.shape == "figure_eight":
+                return Path.figure_eight(t, a=self.a, v=self.v)
+            elif self.shape == "straight_line":
+                return Path.straight_line(t, slope=self.slope, intercept=self.intercept, v=self.v)
+        except:
+            print("Provide correct path format!")
 
     def add_obstacle(self, *obstacles):
         '''
@@ -552,7 +571,7 @@ class PathPlanningFrenetFrame:
         for i in tqdm(range(int(self.T / self.dt)), desc="Simulating", unit="iterations"):
             t = i * self.dt
 
-            target_state = Path.circle(t)
+            target_state = self.target_path.equation(t)
             control_action = self.controller.control(current_state, target_state)
             updated_state = robot.update_state(control_action, self.dt)
             current_state = updated_state
@@ -679,17 +698,19 @@ if __name__ == "__main__":
         > initial values of all angles ($\theta$, $\phi$)
         > lengths of joining rods ($L$, $D$)
     '''
-
     start = time.time()
-    robot = RobotDynamics([10,-10.5], [1.5, 1.5, 1.5], [2.0, 2.0, 2.0], [np.pi/2, np.pi/2, np.pi/2], [np.pi/2, np.pi/2, np.pi/2], trailer_count=3, direction=True)
-    # robot = RobotDynamics([10,-7], [1.5, 1.5], [2.0, 2.0], [np.pi/2, np.pi/2], [np.pi/2, np.pi/2], trailer_count=2, direction=True)
-    # robot = RobotDynamics([-3.5*np.pi/4, -3.5*np.pi/4], [1.5], [2.0], [np.pi/4], [np.pi/4], trailer_count=1, direction=True)
-    # robot = RobotDynamics([10,-3.5], [1.5], [2.0], [np.pi/2], [np.pi/2], trailer_count=1, direction=True)
+
+    OFFSET = [10,-7]
+    THETA = [np.pi/2, np.pi/2]
+    PHI = [np.pi/2, np.pi/2]
+    L = [1.5, 1.5]
+    D = [2.0, 2.0]
+
+    robot = RobotDynamics(OFFSET, L, D, THETA, PHI, trailer_count=2, direction=True)
     robot.diagnostics()
     mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
     circle = Path("circle")
-    # circle.add_obstacles()
-    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=65, dt=0.1)
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=10, dt=0.1)
     trajectory.control_loop()
     # trajectory.diagnostics()
     robot.diagnostics()
