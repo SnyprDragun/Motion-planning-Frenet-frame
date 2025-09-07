@@ -622,8 +622,8 @@ class PathPlanningFrenetFrame:
         ax_traj.set_title("Trajectory")
         ax_traj.set_xlabel("X")
         ax_traj.set_ylabel("Y")
-        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Target")
-        current_line, = ax_traj.plot([], [], "r-", label="Current")
+        ax_traj.plot(self.target_states[:, 0], self.target_states[:, 1], "k--", label="Ideal")
+        current_line, = ax_traj.plot([], [], "r-", label="Simulated")
         ax_traj.legend()
         ax_traj.set_aspect("equal", adjustable="datalim")
 
@@ -644,24 +644,40 @@ class PathPlanningFrenetFrame:
         hitch_scats = [ax_traj.plot([], [], "bo", label=f"Hitch {i+1}" if i == 0 else "")[0] for i in range(n_pairs)]
         trailer_scats = [ax_traj.plot([], [], "go", label=f"Trailer {i+1}" if i == 0 else "")[0] for i in range(n_pairs)]
 
+        # ---- Links ---- #
+        n_links = 2 * n_pairs
+        link_lines = [ax_traj.plot([], [], "k-")[0] for _ in range(n_links)]
+
         def update(frame):
             current_line.set_data(self.current_states[:frame, 0], self.current_states[:frame, 1])
             line_v.set_data(t[:frame], self.control_actions[:frame, 0])
             line_w.set_data(t[:frame], self.control_actions[:frame, 1])
 
+            mx, my = self.current_states[frame-1, 0], self.current_states[frame-1, 1]
+            mule_scats[0].set_data([mx], [my])
+
             for i in range(n_pairs):
-                mx, my = self.current_states[frame-1:frame, 0], self.current_states[frame-1:frame, 1]
                 hx, hy = self.hitches[frame, i]
                 tx, ty = self.trailers[frame, i]
-                mule_scats[0].set_data([mx], [my])
                 hitch_scats[i].set_data([hx], [hy])
                 trailer_scats[i].set_data([tx], [ty])
+
+            chain_x = [mx]
+            chain_y = [my]
+            for i in range(n_pairs):
+                hx, hy = self.hitches[frame, i]
+                tx, ty = self.trailers[frame, i]
+                chain_x += [hx, tx]
+                chain_y += [hy, ty]
+
+            for j in range(len(chain_x) - 1):
+                link_lines[j].set_data([chain_x[j], chain_x[j+1]], [chain_y[j], chain_y[j+1]])
 
             ax_traj.relim(); ax_traj.autoscale_view()
             ax_v.relim(); ax_v.autoscale_view()
             ax_w.relim(); ax_w.autoscale_view()
 
-            return [current_line, line_v, line_w] + mule_scats + hitch_scats + trailer_scats
+            return [current_line, line_v, line_w] + mule_scats + hitch_scats + trailer_scats + link_lines
 
         ani = animation.FuncAnimation(fig, update, frames=n_frames, interval=interval, blit=False, repeat=False)
         plt.show()
