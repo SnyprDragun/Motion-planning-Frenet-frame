@@ -573,7 +573,7 @@ class PathPlanningFrenetFrame:
 
             target_state = self.target_path.equation(t)
             control_action = self.controller.control(current_state, target_state)
-            updated_state = robot.update_state(control_action, self.dt)
+            updated_state = self.robot.update_state(control_action, self.dt)
             current_state = updated_state
 
             self.store_hitch_trailer()

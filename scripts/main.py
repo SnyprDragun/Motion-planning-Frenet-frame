@@ -1,45 +1,42 @@
 #!/Users/subhodeep/venv/bin/python
-
+'''main script'''
+import time
 import numpy as np
+from Path import Path
 from Obstacle import Obstacle
-from Controller import Controller
-from ParametricFunctions import ParametricFunctions
-from CartesianFrenetConverter import CartesianFrenetConverter
+from RobotDynamics import RobotDynamics
+from Controller import MPCParams, UnicycleMPC
 from PathPlanningFrenetFrame import PathPlanningFrenetFrame
 
 if __name__ == "__main__":
-    #========================================================================#
-    #============= FORWARD FIGURE EIGHT WITH OBSTACLE AVOIDANCE =============#
-    # direction toggle
-    is_reverse = False
+    r'''
+    < ================= Main ================= >
 
-    path_func = lambda t: ParametricFunctions.figure_eight(t, a=10.0, v=1.0)
-    controller = Controller(N=20, dt=0.1, v=1.0, is_reverse=is_reverse)
-    sim = PathPlanningFrenetFrame(path_func, (0, 0, np.pi/4), controller, L=1.5, D=2.0, dt=0.1, T=80)
+    Choose:
+        > robot dynamics - no. of trailers, direction of motion
+        > controller - mpc or other
+        > path - straight line, circle, ellipse, figure-eight
 
-    # circular obstacle at (x,y) with radius r
-    sim.add_obstacle(Obstacle(10.0, 0.0, 0.2),
-                     clearance=1.0, influence_margin=1.0,
-                     detour_span=5.0, pre_start=4.0, max_amplitude=0.5)
-    sim.add_obstacle(Obstacle(-7.0, 5.0, 0.2),
-                     clearance=1.0, influence_margin=1.0,
-                     detour_span=5.0, pre_start=4.0, max_amplitude=0.5)
+    Specify:
+        > initial position of last trailer (offset)
+        > initial values of all angles ($\theta$, $\phi$)
+        > lengths of joining rods ($L$, $D$)
+    '''
+    start = time.time()
 
-    sim.simulate()
-    sim.animate()
+    OFFSET = [10,-7]
+    THETA = [np.pi/2, np.pi/2]
+    PHI = [np.pi/2, np.pi/2]
+    L = [1.5, 1.5]
+    D = [2.0, 2.0]
 
-    #========================================================================#
-    #============ REVERSE FIGURE EIGHT WITHOUT OBSTACLE AVOIDANCE ===========#
-    # direction toggle
-    # is_reverse = True
-
-    # path_func = lambda t: ParametricFunctions.figure_eight(t, a=10.0, v=1.0)
-    # controller = Controller(N=20, dt=0.1, v=1.0, is_reverse=is_reverse)
-
-    # x_start, y_start, theta_start, kappa_start = path_func(0.01)
-    # start_pose = (x_start, y_start, CartesianFrenetConverter.normalize_angle(theta_start + np.pi))
-
-    # sim = PathPlanningFrenetFrame(path_func, start_pose, controller, L=1.5, D=2.0, dt=0.1, T=80, is_reverse=is_reverse)
-
-    # sim.simulate()
-    # sim.animate()
+    robot = RobotDynamics(OFFSET, L, D, THETA, PHI, trailer_count=2, direction=True)
+    robot.diagnostics()
+    mpc = UnicycleMPC(MPCParams(dt=0.1, N=20))
+    circle = Path("circle")
+    trajectory = PathPlanningFrenetFrame(robot=robot, target_path=circle, controller=mpc, T=65, dt=0.1)
+    trajectory.control_loop()
+    # trajectory.diagnostics()
+    robot.diagnostics()
+    trajectory.display_time(start, time.time())
+    trajectory.plot()

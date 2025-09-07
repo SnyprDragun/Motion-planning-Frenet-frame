@@ -1,252 +1,179 @@
 #!/Users/subhodeep/venv/bin/python
-
+'''classes for MPC'''
 import numpy as np
-from scipy.optimize import minimize
+from dataclasses import dataclass
+from typing import Tuple, Optional
 from CartesianFrenetConverter import CartesianFrenetConverter
+try:
+    from scipy.optimize import minimize
+except ImportError as e:
+    raise ImportError("This controller requires SciPy for optimization: pip install scipy") from e
+
+@dataclass
+class MPCParams:
+    dt: float = 0.1                  # sampling time [s]
+    N: int = 15                      # prediction horizon
+    v_min: float = -0.8              # min linear velocity [m/s]
+    v_max: float = 1.0               # max linear velocity [m/s]
+    w_min: float = -2.5              # min angular velocity [rad/s]
+    w_max: float = 2.5               # max angular velocity [rad/s]
+    dv_max: float = 0.5              # max |Δv| per step [m/s]
+    dw_max: float = 1.0              # max |Δω| per step [rad/s]
+    # costs
+    q_xy: float = 2.0                # weight on (x,y) position error
+    q_th: float = 0.3                # weight on heading error
+    r_v: float = 0.02                # weight on absolute v
+    r_w: float = 0.02                # weight on absolute ω
+    s_v: float = 0.5                 # weight on |Δv|
+    s_w: float = 0.3                 # weight on |Δω|
+    qT_xy: float = 6.0               # terminal (x,y)
+    qT_th: float = 1.0               # terminal heading
 
 
-class Controller:
+class UnicycleMPC:
     """
-    MPC Controller with fine-tuned weights for smooth and stable motion.
+    Model Predictive Controller for a unicycle robot.
+    State:   x = [x, y, theta]
+    Control: u = [v, w]  (linear, angular)
+    Dynamics:
+        x_{k+1} = x_k + dt * [ v*cos(theta_k), v*sin(theta_k), w ]
     """
-    def __init__(self, N=12, dt=0.1, v=1.0, w_d_mule=1200.0, w_d_hitch=0.0, w_d_trailer=0.0, w_d_dot_trailer=200.0, w_phi=800.0, w_omega_mule=0.01, 
-                w_omega_rate_mule=1.0, omega_bounds=[(-2.0, 2.0)], max_delta_omega=0.5, use_exp_smooth=False, smooth_alpha=0.3, is_reverse=False):
+    def __init__(self, params: Optional[MPCParams] = None):
+        self.p = params or MPCParams()
+        # Keep last solution for warm-start
+        self._u_prev_seq = np.zeros(2 * self.p.N)  # [v0..vN-1, w0..wN-1]
+
+    # ----------------- public API -----------------
+    def control(self, x_now: np.ndarray, x_target: np.ndarray) -> Tuple[float, float]:
         """
-        MPC controller using only lateral Frenet errors of mule, hitch, trailer.
-        - N: horizon steps
-        - dt: timestep
-        - lookahead = N * dt
-        - v: forward speed (constant)
-        - w_d_mule/hitch/trailer: weights on lateral deviations
-        - w_d_mule is the key weight to enforce strict lateral following (increase if you want stricter)
-        - w_omega, w_omega_rate: regularization on omega magnitude and rate
-        - omega_bounds: bounds on steering rate omega
-        - max_delta_omega: max allowed change in omega per step
-        - use_exp_smooth: apply exponential smoothing on omega output
+        Compute the first control action (v, w).
+        x_now:     [x, y, theta]
+        x_target:  [x*, y*, theta*]  (theta* optional: if NaN, ignore heading error)
         """
-        self.N = N
-        self.dt = dt
-        self.v = v
+        x_now = np.asarray(x_now, dtype=float).reshape(3)
+        x_ref = np.asarray(x_target, dtype=float).reshape(3)
+        theta_ref_valid = np.isfinite(x_ref[2])
 
-        self.w_d_mule = w_d_mule
-        self.w_d_hitch = w_d_hitch
-        self.w_d_trailer = w_d_trailer
-        self.w_d_dot_trailer = w_d_dot_trailer
-        self.w_phi = w_phi
+        # Warm start: shift previous optimal controls forward one step
+        u0 = self._warm_start()
 
-        self.w_omega_mule = w_omega_mule
-        self.w_omega_rate_mule = w_omega_rate_mule
+        # Box bounds on controls
+        bounds = [(self.p.v_min, self.p.v_max)] * self.p.N + [(self.p.w_min, self.p.w_max)] * self.p.N
 
-        self.omega_bounds = omega_bounds
-        self.prev_omega = 0.0
-        self.max_delta_omega = max_delta_omega
+        # Build inequality constraints for slew-rate (Δu) limits: |u_k - u_{k-1}| <= d_max
+        A_ineq, b_ineq = self._delta_constraints()
 
-        self.use_exp_smooth = use_exp_smooth
-        self.smooth_alpha = smooth_alpha
+        cons = []
+        if A_ineq is not None:
+            cons.append({
+                "type": "ineq",
+                "fun": lambda u, A=A_ineq, b=b_ineq: b - A @ u
+            })
 
-        self.is_reverse = is_reverse
-
-        if self.is_reverse:
-            self.w_d_trailer = 3500.0
-            self.w_omega_rate_mule = 9000.0
-        else:
-            self.w_d_trailer = 0.0
-            self.w_omega_rate_mule=1.0
-
-    def step_dynamics_forward(self, state, omega, L, D):
-        """
-        Mule frame
-        Propagates the mule-centric state forward in time for one step.
-        State: [x_mule, y_mule, theta_mule, phi_hitch]
-
-        Approach:   • compute rate of change of motion for x, y, theta, phi of mule
-                    • compute mule state for next time step
-                    • return new mule state
-        """
-        x_mule, y_mule, theta_mule, phi_hitch = state
-
-        # ===== computing rate of change of motion for x, y, theta, phi ===== #
-        dx = self.v * np.cos(theta_mule)
-        dy = self.v * np.sin(theta_mule)
-        dtheta = omega
-        dphi = (self.v * np.sin(theta_mule - phi_hitch) - L * omega * np.cos(theta_mule - phi_hitch)) / D
-
-        # ======== computing new x, y, theta, phi for next time step ======== #
-        x_mule_new = x_mule + dx * self.dt
-        y_mule_new = y_mule + dy * self.dt
-        theta_mule_new = CartesianFrenetConverter.normalize_angle(theta_mule + dtheta * self.dt)
-        phi_hitch_new = CartesianFrenetConverter.normalize_angle(phi_hitch + dphi * self.dt)
-
-        return np.array([
-            x_mule_new,
-            y_mule_new,
-            theta_mule_new,
-            phi_hitch_new
-        ])
-
-    def step_dynamics_reverse(self, state, omega, L, D):
-        """
-        Trailer frame
-        Propagates the trailer-centric state forward in time for one step.
-        State: [x_trailer, y_trailer, theta_trailer, phi_hitch]
-
-        Approach:   • compute mule heading from theta_trailer and phi_hitch
-                    • compute rate of change of motion for x, y, theta, phi of trailer
-                    • compute trailer state for next time step
-                    • return new trailer state
-        """
-        x_trailer, y_trailer, theta_trailer, phi_hitch = state
-        theta_mule = CartesianFrenetConverter.normalize_angle(theta_trailer + phi_hitch)
-
-        # ===== computing velocity components at hitch from mule heading ===== #
-        vx_hitch = -self.v * np.cos(theta_mule) + L * omega * np.sin(theta_mule)
-        vy_hitch = -self.v * np.sin(theta_mule) - L * omega * np.cos(theta_mule)
-
-        # ======= computing velocity components for trailer from hitch ======= #
-        v_parallel_trailer = vx_hitch * np.cos(theta_trailer) + vy_hitch * np.sin(theta_trailer)
-        v_perpendicular_trailer = -vx_hitch * np.sin(theta_trailer) + vy_hitch * np.cos(theta_trailer)
-        dtheta_trailer = v_perpendicular_trailer / D
-        dphi = omega - dtheta_trailer
-
-        # ========= computing new x, y, theta, phi for next time step ======== #
-        x_trailer_new = x_trailer + v_parallel_trailer * np.cos(theta_trailer) * self.dt
-        y_trailer_new = y_trailer + v_parallel_trailer * np.sin(theta_trailer) * self.dt
-        theta_trailer_new = CartesianFrenetConverter.normalize_angle(theta_trailer + dtheta_trailer * self.dt)
-        phi_hitch_new = CartesianFrenetConverter.normalize_angle(phi_hitch + dphi * self.dt)
-
-        return np.array([
-            x_trailer_new, 
-            y_trailer_new, 
-            theta_trailer_new, 
-            phi_hitch_new])
-
-    def lateral_deviation(self, x, y, theta_ref, rx, ry):
-        """
-        Compute lateral deviation d for pose (x,y) relative to reference path point (rx, ry, theta_ref).
-        """
-        return np.sin(theta_ref) * (x - rx) - np.cos(theta_ref) * (y - ry)
-
-    def compute_hitch_trailer_pose(self, mule_pose, phi, L, D):
-        """
-        Compute hitch and trailer poses from mule pose and hitch angle phi.
-        Returns: (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer)
-        """
-        x, y, theta = mule_pose
-
-        # ================== Hitch position behind mule by L ================= #
-        x_hitch = x - L * np.cos(theta)
-        y_hitch = y - L * np.sin(theta)
-        theta_hitch = CartesianFrenetConverter.normalize_angle(theta + phi)
-
-        # ================ Trailer position behind hitch by D ================ #
-        x_trailer = x_hitch - D * np.cos(theta_hitch)
-        y_trailer = y_hitch - D * np.sin(theta_hitch)
-        theta_trailer = theta_hitch  # trailer heading same as hitch
-
-        return (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer)
-
-    def cost(self, omega_seq, state0, t0, path_func, L, D):
-        """
-        Cost function using Frenet frame errors and hard constraints for robust tracking.
-        """
-        state = np.array(state0, dtype=float)
-        J = 0.0
-        prev_omega = self.prev_omega
-
-        for i in range(self.N):
-            omega = float(omega_seq[i])
-            x_lead, y_lead, theta_lead, phi_hitch = state
-            t_pred = t0 + (i + 1) * self.dt
-            x_ref, y_ref, theta_ref, kappa_ref = path_func(t_pred)
-
-            if self.is_reverse:
-                # =============== for reverse ===============
-                state = self.step_dynamics_reverse(state, omega, L, D)
-                x_ref_trailer, y_ref_trailer, theta_ref_trailer, phi_hitch = state
-
-                s_cond, d_cond = CartesianFrenetConverter.cartesian_to_frenet(
-                    rs=t_pred * self.v, rx=x_ref, ry=y_ref, rtheta=theta_ref,
-                    rkappa=kappa_ref, rdkappa=0.0, x=x_ref_trailer, y=y_ref_trailer,
-                    v=self.v, a=0.0, theta=theta_ref_trailer, kappa=0.0
-                )
-
-                if d_cond is None:
-                    J += 1e7
-                    continue
-
-                # Cost on lateral deviation (d) and lateral velocity (d_prime or d_dot).
-                # Penalizing d_prime implicitly corrects heading error in a stable way.
-                J += self.w_d_trailer * (d_cond[0] ** 2)
-                J += self.w_d_dot_trailer * (d_cond[1] ** 2)
-
-                # Soft cost on hitch angle
-                J += self.w_phi * (phi_hitch ** 2)
-
-                # *** CRITICAL: Hard constraint to prevent jack-knifing ***
-                # Apply an enormous penalty if the hitch angle exceeds a safe physical limit.
-                if abs(phi_hitch) > np.radians(85): # 85 degrees is a safe limit
-                    J += 1e8 
-
-                # Regularize control inputs for smoothness
-                J += self.w_omega_mule * (omega ** 2)
-                J += self.w_omega_rate_mule * ((omega - prev_omega) ** 2)
-                prev_omega = omega
-
+        # Objective
+        def objective(u: np.ndarray) -> float:
+            v_seq = u[:self.p.N]
+            w_seq = u[self.p.N:]
+            # simulate
+            traj = self._rollout(x_now, v_seq, w_seq)
+            # stage costs
+            pos_err = traj[:, :2] - x_ref[:2]          # (N+1, 2)
+            e_xy2 = np.sum(pos_err**2, axis=1)        # (N+1,)
+            if theta_ref_valid:
+                e_th = np.array([CartesianFrenetConverter.normalize_angle(th - x_ref[2]) for th in traj[:, 2]])
+                e_th2 = e_th**2
             else:
-                # =============== for forward ===============
-                state = self.step_dynamics_forward(state, omega, L, D)
+                e_th2 = np.zeros(self.p.N + 1)
 
-                # Time-shifted reference points for hitch and trailer (accounting for physical offset)
-                t_pred_hitch = max(t_pred - L / self.v, 0.0)
-                t_pred_trailer = max(t_pred - (L + D) / self.v, 0.0)
+            # smoothness (Δu) and effort
+            dv = np.diff(v_seq, prepend=v_seq[0])
+            dw = np.diff(w_seq, prepend=w_seq[0])
 
-                x_ref_hitch, y_ref_hitch, theta_ref_hitch, kappa_ref_hitch = path_func(t_pred_hitch)
-                x_ref_trailer, y_ref_trailer, theta_ref_trailer, kappa_ref_trailer = path_func(t_pred_trailer)
-                (x_hitch, y_hitch, theta_hitch), (x_trailer, y_trailer, theta_trailer) = self.compute_hitch_trailer_pose((x_lead, y_lead, theta_lead), phi_hitch, L, D)
+            J_stage = np.sum(self.p.q_xy * e_xy2[:-1] + self.p.q_th * e_th2[:-1]
+                             + self.p.r_v * (v_seq**2) + self.p.r_w * (w_seq**2)
+                             + self.p.s_v * (np.abs(dv)) + self.p.s_w * (np.abs(dw)))
 
-                d_mule = self.lateral_deviation(x_lead, y_lead, theta_ref, x_ref, y_ref)
-                d_hitch = self.lateral_deviation(x_hitch, y_hitch, theta_ref_hitch, x_ref_hitch, y_ref_hitch)
-                d_trailer = self.lateral_deviation(x_trailer, y_trailer, theta_ref_trailer, x_ref_trailer, y_ref_trailer)
+            # terminal
+            J_term = self.p.qT_xy * e_xy2[-1] + self.p.qT_th * e_th2[-1]
+            return J_stage + J_term
 
-                # Accumulate weighted lateral deviation costs
-                J += self.w_d_mule * (d_mule ** 2)
-                J += self.w_d_hitch * (d_hitch ** 2)
-                J += self.w_d_trailer * (d_trailer ** 2)
+        res = minimize(
+            objective, u0, method="SLSQP", bounds=bounds, constraints=cons,
+            options={"maxiter": 100, "ftol": 1e-4, "disp": False}
+        )
 
-                # Regularize omega and omega rate change
-                J += self.w_omega_mule * (omega ** 2)
-                J += self.w_omega_rate_mule * ((omega - prev_omega) ** 2)
+        u_opt = res.x if res.success else u0
+        self._u_prev_seq = u_opt.copy()
 
-                heading_err = np.atan2(np.sin(theta_lead - theta_ref), np.cos(theta_lead - theta_ref))
-                J += 200.0 * (heading_err ** 2)  # small weight, tune as needed
+        v_cmd = float(np.clip(u_opt[0], self.p.v_min, self.p.v_max))
+        w_cmd = float(np.clip(u_opt[self.p.N], self.p.w_min, self.p.w_max))
+        return [v_cmd, w_cmd]
 
-                prev_omega = omega
+    # ----------------- helpers -----------------
+    def _rollout(self, x0: np.ndarray, v_seq: np.ndarray, w_seq: np.ndarray) -> np.ndarray:
+        """Simulate N steps; return (N+1, 3) states including x0."""
+        dt = self.p.dt
+        x = x0.copy()
+        traj = [x.copy()]
+        for k in range(self.p.N):
+            v = v_seq[k]
+            w = w_seq[k]
+            x[0] = x[0] + dt * v * np.cos(x[2])
+            x[1] = x[1] + dt * v * np.sin(x[2])
+            x[2] = CartesianFrenetConverter.normalize_angle(x[2] + dt * w)
+            traj.append(x.copy())
+        return np.vstack(traj)
 
-        return J
+    def _warm_start(self) -> np.ndarray:
+        """Shift previous sequence forward; keep last value for the tail."""
+        u = self._u_prev_seq
+        N = self.p.N
+        v_seq = u[:N]
+        w_seq = u[N:]
+        v_ws = np.r_[v_seq[1:], v_seq[-1]]
+        w_ws = np.r_[w_seq[1:], w_seq[-1]]
+        return np.r_[v_ws, w_ws]
 
-    def mpc(self, x, y, theta, phi, path_func, t0=0.0, L=1.5, D=2.0):
+    def _delta_constraints(self):
         """
-        function to implement Model Predictive Control on leading mass, given x, y, theta of leading mass, and hitch anle phi
-        Return: ideal streering angular velocity
+        Build |Δv_k|<=dv_max, |Δw_k|<=dw_max as linear inequalities:
+            -dv_max <= v_k - v_{k-1} <= dv_max   (similar for w)
+        SLSQP accepts A u <= b. We express both sides by stacking.
+        Use first element relative to previous optimal first element (fixed at itself -> no constraint tightening).
         """
-        state0 = [x, y, theta, phi]
-        init_guess = np.full(self.N, self.prev_omega, dtype=float)
-        bounds = self.omega_bounds * self.N
+        N = self.p.N
+        dv = self.p.dv_max
+        dw = self.p.dw_max
+        if not np.isfinite(dv) and not np.isfinite(dw):
+            return None, None
 
-        res = minimize(self.cost, init_guess, args=(state0, t0, path_func, L, D), bounds=bounds, method='SLSQP', options={'maxiter': 200, 'ftol': 1e-4})
+        # Variables: u = [v0..vN-1, w0..wN-1]
+        dim = 2 * N
+        rows = []
+        rhs = []
 
-        if res.success:
-            omega_raw = float(res.x[0])
-        else:
-            omega_raw = self.prev_omega
+        # v deltas
+        if np.isfinite(dv):
+            # k=0: we don't constrain against unknown previous command; instead cap |v0| change by bounds already.
+            for k in range(1, N):
+                row = np.zeros(dim)
+                row[k] = 1.0      # v_k
+                row[k - 1] = -1.0 # -v_{k-1}
+                rows.append(row.copy());  rhs.append(dv)   #  v_k - v_{k-1} <= dv
+                rows.append(-row.copy()); rhs.append(dv)   # -v_k + v_{k-1} <= dv  => -(v_k - v_{k-1}) <= dv
 
-        if self.use_exp_smooth:
-            omega_out = self.smooth_alpha * omega_raw + (1.0 - self.smooth_alpha) * self.prev_omega
-        else:
-            omega_out = omega_raw
+        # w deltas
+        if np.isfinite(dw):
+            offset = N
+            for k in range(1, N):
+                row = np.zeros(dim)
+                row[offset + k] = 1.0
+                row[offset + k - 1] = -1.0
+                rows.append(row.copy());  rhs.append(dw)
+                rows.append(-row.copy()); rhs.append(dw)
 
-        maxd = self.max_delta_omega
-        omega_out = float(np.clip(omega_out, self.prev_omega - maxd, self.prev_omega + maxd))
-        self.prev_omega = omega_out
-
-        return omega_out
+        if not rows:
+            return None, None
+        A = np.vstack(rows)
+        b = np.asarray(rhs)
+        return A, b
