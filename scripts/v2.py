@@ -247,7 +247,7 @@ class RobotDynamics:
         print(tabulate(rows, headers, tablefmt='grid'))
 
 
-class Path():
+class Path:
     '''
     Parametric functions to generate path points. Also handles obstcale avoidance. 
     Returns. safe and optimal path point for traversal
@@ -528,7 +528,7 @@ class UnicycleMPC:
 
 
 @dataclass
-class Obstacle():
+class Obstacle:
     x: float
     y: float
     radius: float
