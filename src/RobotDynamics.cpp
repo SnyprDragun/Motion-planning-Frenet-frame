@@ -90,7 +90,7 @@ pair<array<double,2>, array<double,2>> RobotDynamics::calculate_kth_hitch_traile
     return {hitch, trailer};
 }
 
-array<double,3> RobotDynamics::update_state(const array<double,2>& control_action, double dt){
+array<double,3> RobotDynamics::update_state(const array<double,2> control_action, double dt){
     /*
     We approach this problem by first calculating for mule with $1$ hitch-trailer, then recursively calculate for the rest $N-1$ hitch-trailers.
     If control_action is $v$ and $\omega$, then we have $\dot x = v \cos(\theta)$, $\dot y = v \sin(\theta)$ and $\dot\theta = \omega$, where $(x, y, \theta)$ is mule pose ($\theta$ is angle at hitch).
