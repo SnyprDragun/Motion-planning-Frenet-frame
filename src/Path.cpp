@@ -4,13 +4,22 @@
     Source: https://github.com/SnyprDragun/Motion-planning-Frenet-frame
 */
 
-#include "ParametricFunctions.hpp"
+#include "Path.hpp"
 
-ParametricFunctions::ParametricFunctions(){}
+Path::Path(string shape, float R=10.0, float a=12.0, float b=8.0, float slope=0.0, float intercept=0.0, float v=1.0){
+    this->shape = shape;
+    this->R = R;
+    this->a = a;
+    this->b = b;
+    this->slope = slope;
+    this->intercept = intercept;
+    this->v = v;
+    this->obstacles = 0;
+}
 
-ParametricFunctions::~ParametricFunctions(){}
+Path::~Path(){}
 
-PathPoint ParametricFunctions::straight_line(double t, double slope=0.0, double intercept=0.0, double v=1.0) {
+PathPoint Path::straight_line(double t, double slope=0.0, double intercept=0.0, double v=1.0) {
     /*
     Generates a straight line path and its kinematic properties.
     Returns: x, y, theta (heading), kappa (curvature)
@@ -26,7 +35,7 @@ PathPoint ParametricFunctions::straight_line(double t, double slope=0.0, double 
     return path_point;
 }
 
-PathPoint ParametricFunctions::circle(double t, double R=10.0, double v=1.0) {
+PathPoint Path::circle(double t, double R=10.0, double v=1.0) {
     /*
     Generates a circle path and its kinematic properties.
     Returns: x, y, theta (heading), kappa (curvature)
@@ -43,7 +52,7 @@ PathPoint ParametricFunctions::circle(double t, double R=10.0, double v=1.0) {
     return path_point;
 }
 
-PathPoint ParametricFunctions::ellipse(double t, double a=10.0, double b=6.0, double v=1.0) {
+PathPoint Path::ellipse(double t, double a=10.0, double b=6.0, double v=1.0) {
     /*
     Generates an ellipse path and its kinematic properties.
     Returns: x, y, theta (heading), kappa (curvature)
@@ -74,7 +83,7 @@ PathPoint ParametricFunctions::ellipse(double t, double a=10.0, double b=6.0, do
     return path_point;
 }
 
-PathPoint ParametricFunctions::figure_eight(double t, double a=10.0, double v=1.0) {
+PathPoint Path::figure_eight(double t, double a=10.0, double v=1.0) {
     /*
     Generates a figure-eight path and its kinematic properties.
     Returns: x, y, theta (heading), kappa (curvature)
@@ -103,3 +112,24 @@ PathPoint ParametricFunctions::figure_eight(double t, double a=10.0, double v=1.
 
     return path_point;
 }
+
+PathPoint Path::equation(float t){
+    try {
+        if (this->shape == "circle") {
+            return Path::circle(t, R, v);
+        } else if (shape == "ellipse") {
+            return Path::ellipse(t, a, b, v);
+        } else if (shape == "figure_eight") {
+            return Path::figure_eight(t, a, v);
+        } else if (shape == "straight_line") {
+            return Path::straight_line(t, slope, intercept, v);
+        } else {
+            throw invalid_argument("Unknown path shape!");
+        }
+    } catch (const exception& e) {
+        cerr << "Provide correct path format! (" << e.what() << ")\n";
+        return {0.0, 0.0}; // fallback
+    }
+}
+
+void Path::add_obstacle(){}

@@ -5,103 +5,158 @@
 */
 
 #include "PathPlanningFrenetFrame.hpp"
-#include "ParametricFunctions.hpp"
-#include "CartesianFrenetConverter.hpp"
-#include <iostream>
-#include <fstream>
 
-void write_csv(const string& filename, const vector<array<double,2>>& points) {
-    ofstream file(filename);
-    file << "x,y\n";
-    for (auto &p : points) file << p[0] << "," << p[1] << "\n";
-    file.close();
+ostream& operator<<(ostream& os, const PathPoint& pt) {
+    os << pt.x << ", " << pt.y << ", " << pt.theta;
+    return os;
 }
 
-PathPlanningFrenetFrame::PathPlanningFrenetFrame(){}
-
-PathPlanningFrenetFrame::~PathPlanningFrenetFrame(){}
-
-void PathPlanningFrenetFrame::convert_cartesian_path_to_frenet(){
-    cout << "[INFO] Converting Cartesian path to Frenet coordinates...\n";
-
-    ParametricFunctions curve(10.0);   // figure-eight
-    int N = 400;
-    double T_MAX = 2 * M_PI;
-
-    vector<array<double,2>> points;
-    points.reserve(N);
-    for (int i = 0; i < N; i++) {
-        double t = T_MAX * i / (N - 1);
-        points.push_back(curve.figure_eight(t));
-    }
-
-    vector<double> s_vals(N, 0.0);
-    for (int i = 1; i < N; i++) {
-        double dx = points[i][0] - points[i-1][0];
-        double dy = points[i][1] - points[i-1][1];
-        s_vals[i] = s_vals[i-1] + hypot(dx, dy);
-    }
-
-    vector<array<double,2>> frenet_points;
-    frenet_points.reserve(N);
-
-    for (int i = 0; i < N; i++) {
-        double rs = s_vals[i];
-        double rtheta = (i < N-1) ? atan2(points[i+1][1] - points[i][1], points[i+1][0] - points[i][0])
-                                  : atan2(points[i][1] - points[i-1][1], points[i][0] - points[i-1][0]);
-
-        auto result = CartesianFrenetConverter::cartesian_to_frenet(
-            rs, points[i][0], points[i][1], rtheta, 0.0, 0.0,
-            points[i][0], points[i][1], 1.0, 0.0, rtheta, 0.0);
-
-        frenet_points.push_back({result.first[0], result.second[0]});
-    }
-
-    write_csv("output_cartesian.csv", points);
-    write_csv("output_frenet.csv", frenet_points);
-
-    cout << "[INFO] Saved output_cartesian.csv and output_frenet.csv\n";
+PathPlanningFrenetFrame::PathPlanningFrenetFrame(RobotDynamics& robot, Path& target_path, Controller& controller, float T, float dt
+) : robot(robot), target_path(target_path), controller(controller), T(T), dt(dt), current_states(), target_states(), 
+control_actions(), hitches(), trailers(), current_states_frenet(), target_states_frenet(), control_actions_frenet()
+{
+    // Constructor body (empty because everything is initialized in the initializer list)
 }
 
-void PathPlanningFrenetFrame::track_frenet_path_no_obstacles(){
-    cout << "[INFO] Tracking (no obstacles)...\n";
-    vector<array<double,2>> traj;
-    for (int i = 0; i < 50; i++) traj.push_back({(double)i, sin(0.1*i)});
-    write_csv("tracking_no_obstacles.csv", traj);
+PathPlanningFrenetFrame::~PathPlanningFrenetFrame(){
+
 }
 
-void PathPlanningFrenetFrame::track_frenet_path_with_obstacles(){
-    cout << "[INFO] Tracking (with obstacles)...\n";
-    vector<array<double,2>> traj;
-    for (int i = 0; i < 50; i++) {
-        double y = sin(0.1*i);
-        if (i == 25) y += 2.0; // deviation due to obstacle
-        traj.push_back({(double)i, y});
+void PathPlanningFrenetFrame::store_hitch_trailer() {
+    vector<vector<float>> hitches_step;
+    vector<vector<float>> trailers_step;
+
+    for (int i = 0; i < this->robot.trailer_count; ++i) {
+        auto [hitch, trailer] = this->robot.calculate_kth_hitch_trailer_pose(i + 1);
+        hitches_step.push_back(hitch);
+        trailers_step.push_back(trailer);
     }
-    write_csv("tracking_with_obstacles.csv", traj);
+
+    this->hitches.push_back(hitches_step);
+    this->trailers.push_back(trailers_step);
 }
 
-void PathPlanningFrenetFrame::track_frenet_path_with_trailer_no_obstacles(){
-    cout << "[INFO] Tracking with trailer (no obstacles)...\n";
-    vector<array<double,2>> mule, trailer;
-    for (int i = 0; i < 50; i++) {
-        mule.push_back({(double)i, sin(0.1*i)});
-        trailer.push_back({(double)i-1.0, sin(0.1*(i-1.0))});
+void PathPlanningFrenetFrame::control_loop() {
+    PathPoint current_state;
+    current_state.x = this->robot.mule_position[0];
+    current_state.y = this->robot.mule_position[1];
+    current_state.theta = this->robot.mule_orientation;
+
+    int n_iterations = static_cast<int>(T / dt);
+
+    for (int i = 0; i < n_iterations; ++i) {
+        float t = i * dt;
+
+        PathPoint target_state = this->target_path.equation(t);
+        vector<float> control_action = this->controller.control(current_state, target_state);
+        PathPoint updated_state = this->robot.update_state(control_action, dt);
+        current_state = updated_state;
+
+        store_hitch_trailer();
+        this->current_states.push_back(current_state);
+        this->target_states.push_back(target_state);
+        this->control_actions.push_back(control_action);
     }
-    write_csv("trailer_mule_no_obstacles.csv", mule);
-    write_csv("trailer_no_obstacles.csv", trailer);
 }
 
-void PathPlanningFrenetFrame::track_frenet_path_with_trailer_with_obstacles_reverse(){
-    cout << "[INFO] Reverse tracking with trailer (obstacles)...\n";
-    vector<array<double,2>> mule, trailer;
-    for (int i = 0; i < 50; i++) {
-        double x = 50 - i;
-        double y = sin(0.1*x);
-        if (i == 20) y -= 1.5; // obstacle effect
-        mule.push_back({x, y});
-        trailer.push_back({x+1.0, y - 0.5});
+void PathPlanningFrenetFrame::diagnostics() {
+    int n_steps = static_cast<int>(T / dt);
+
+    cout << setw(8) << "Sl.no"
+              << setw(25) << "Current Pose"
+              << setw(25) << "Target Pose"
+              << setw(20) << "Control Action" << endl;
+
+    cout << string(78, '-') << endl;
+
+    for (int i = 0; i < n_steps; ++i) {
+        cout << setw(8) << i + 1;
+
+        cout << setw(25) << "[";
+        cout << fixed << setprecision(4) << current_states[i];
+        cout << "]";
+        cout << setw(25) << "[";
+        cout << fixed << setprecision(4) << target_states[i];
+        cout << "]";
+        cout << setw(20) << "[";
+
+        for (size_t j = 0; j < control_actions[i].size(); ++j) {
+            cout << fixed << setprecision(4) << control_actions[i][j];
+            if (j != control_actions[i].size() - 1) cout << ", ";
+        }
+        cout << "]";
+
+        cout << endl;
     }
-    write_csv("trailer_mule_with_obstacles_reverse.csv", mule);
-    write_csv("trailer_with_obstacles_reverse.csv", trailer);
+}
+
+void PathPlanningFrenetFrame::plot(int interval_ms) {
+    // int n_frames = static_cast<int>(T / dt);
+    // std::vector<double> t(n_frames);
+    // for (int i = 0; i < n_frames; ++i) t[i] = i * dt;
+
+    // // ---- Trajectory ----
+    // std::vector<double> target_x, target_y;
+    // for (auto& state : target_states) {
+    //     target_x.push_back(state[0]);
+    //     target_y.push_back(state[1]);
+    // }
+
+    // plt::figure_size(1200, 600);
+    // plt::subplot(2, 2, 1);  // Trajectory plot
+    // plt::plot(target_x, target_y, "k--");
+
+    // // ---- Animation loop ----
+    // for (int frame = 0; frame < n_frames; ++frame) {
+    //     std::vector<double> current_x, current_y;
+    //     for (int i = 0; i <= frame; ++i) {
+    //         current_x.push_back(current_states[i][0]);
+    //         current_y.push_back(current_states[i][1]);
+    //     }
+
+    //     // Clear previous data
+    //     plt::clf();
+
+    //     // Plot target
+    //     plt::plot(target_x, target_y, "k--");
+
+    //     // Plot current trajectory
+    //     plt::plot(current_x, current_y, "r-");
+
+    //     // Plot mule
+    //     plt::plot({current_states[frame][0]}, {current_states[frame][1]}, "ro");
+
+    //     // Plot hitch & trailer positions
+    //     int n_pairs = hitches[0].size();
+    //     for (int i = 0; i < n_pairs; ++i) {
+    //         plt::plot({hitches[frame][i][0]}, {hitches[frame][i][1]}, "bo");
+    //         plt::plot({trailers[frame][i][0]}, {trailers[frame][i][1]}, "go");
+
+    //         // Draw links
+    //         std::vector<double> link_x = {current_states[frame][0], hitches[frame][i][0], trailers[frame][i][0]};
+    //         std::vector<double> link_y = {current_states[frame][1], hitches[frame][i][1], trailers[frame][i][1]};
+    //         plt::plot(link_x, link_y, "k-");
+    //     }
+
+    //     plt::xlim(-10, 10); // optional adjust limits
+    //     plt::ylim(-10, 10);
+    //     plt::pause(interval_ms / 1000.0);
+    // }
+
+    // plt::show();
+}
+
+void PathPlanningFrenetFrame::display_time(float start, float end) {
+    float elapsed = end - start;
+    int k = static_cast<int>(elapsed);
+    int mins = k / 60;
+    float secs;
+
+    if (elapsed < 1.0) {
+        secs = floor(elapsed * 10000.0) / 100.0;
+    } else {
+        secs = k - (mins * 60);
+    }
+
+    cout << "Time taken: " << mins << " minutes " << secs << " seconds" << endl;
 }
