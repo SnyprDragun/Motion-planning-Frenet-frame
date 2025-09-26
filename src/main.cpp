@@ -2,15 +2,25 @@
     Main script
     Author: Subhodeep Choudhury
     Source: https://github.com/SnyprDragun/Motion-planning-Frenet-frame
+
+    To compile:
+        g++ -std=c++17 \
+        -Iinclude \
+        -I/opt/homebrew/Cellar/eigen/3.4.0_1/include/eigen3/ \
+        -I/opt/homebrew/include/ \
+        src/main.cpp src/RobotDynamics.cpp src/Controller.cpp src/PathPlanningFrenetFrame.cpp src/Path.cpp \
+        -L/opt/homebrew/lib \
+        -lnlopt \
+        -o main
+
+    To run:
+        ./main
 */
 
-#include <chrono>
 #include "PathPlanningFrenetFrame.hpp"
 
-using namespace chrono;
-
 int main() {
-    auto start = high_resolution_clock::now();
+    auto start = chrono::high_resolution_clock::now();
 
     vector<float> OFFSET = {10.0, -7.0};
     vector<float> THETA = {M_PI/2, M_PI/2};
@@ -21,12 +31,16 @@ int main() {
     RobotDynamics robot(OFFSET, L, D, THETA, PHI, 2, true);
     robot.diagnostics();
     Path target_path("circle", 10.0, 12.0, 8.0, 0.0, 0.0, 1.0);
-    Controller controller(1.0, 0.1, 0.01);
+    MPCParams params(0.1, 20);   // dt=0.1, N=20
+    Controller mpc(params);
 
-    PathPlanningFrenetFrame path_planner(robot, target_path, controller, 10.0, 0.1);
+    PathPlanningFrenetFrame trajectory(robot, target_path, mpc, 10.0, 0.1);
+    trajectory.control_loop();
+    trajectory.diagnostics();
+    robot.diagnostics();
 
-    auto end = high_resolution_clock::now();
-    duration<float> elapsed = end - start;
+    auto end = chrono::high_resolution_clock::now();
+    chrono::duration<float> elapsed = end - start;
     cout << "Execution time: " << elapsed.count() << " seconds\n";
 
     return 0;
