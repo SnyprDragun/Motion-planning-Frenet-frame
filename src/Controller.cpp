@@ -16,29 +16,27 @@ vector<float> Controller::control(const PathPoint& x_now, const PathPoint& x_tar
     VectorXd x_ref(3);
     x_ref << x_target.x, x_target.y, x_target.theta;
 
-    // Warm start
-    VectorXd u0 = warm_start();
+    VectorXd u0 = warm_start(x, x_ref);
 
-    // NLopt setup
-    nlopt::opt opt(nlopt::LD_SLSQP, 2 * p.N);
-    vector<double> lb(2*p.N), ub(2*p.N);
-    for (int i=0;i<p.N;i++) { lb[i]=p.v_min; ub[i]=p.v_max; }
-    for (int i=p.N;i<2*p.N;i++) { lb[i]=p.w_min; ub[i]=p.w_max; }
+    nlopt::opt opt(nlopt::LN_SBPLX, 2 * p.N);
+    vector<double> lb(2 * p.N), ub(2 * p.N);
+    for (int i = 0; i < p.N; i++) { lb[i] = p.v_min; ub[i] = p.v_max; }
+    for (int i = p.N; i < 2 * p.N; i++) { lb[i] = p.w_min; ub[i] = p.w_max; }
     opt.set_lower_bounds(lb);
     opt.set_upper_bounds(ub);
 
     ObjData objdata{this, x, x_ref};
     opt.set_min_objective(objective_wrapper, &objdata);
-    opt.set_maxeval(100);
+    opt.set_maxeval(500);
     opt.set_ftol_rel(1e-4);
 
-    vector<double> u_vec(u0.data(), u0.data()+u0.size());
+    vector<double> u_vec(u0.data(), u0.data() + u0.size());
     double minf;
     nlopt::result result = nlopt::FAILURE;
     try {
         result = opt.optimize(u_vec, minf);
-    } catch(...) {
-        u_vec.assign(u0.data(), u0.data()+u0.size()); // fallback
+    } catch (...) {
+        u_vec.assign(u0.data(), u0.data() + u0.size());
     }
 
     u_prev_seq = Map<VectorXd>(u_vec.data(), u_vec.size());
@@ -53,36 +51,56 @@ vector<float> Controller::control(const PathPoint& x_now, const PathPoint& x_tar
 }
 
 MatrixXd Controller::rollout(const VectorXd& x0, const VectorXd& v_seq, const VectorXd& w_seq) {
-    MatrixXd traj(p.N+1, 3);
+    MatrixXd traj(p.N + 1, 3);
     VectorXd x = x0;
     traj.row(0) = x.transpose();
-    for (int k=0;k<p.N;k++) {
-        double v = v_seq(k);
-        double w = w_seq(k);
+    auto clamp = [](double val, double min_val, double max_val) {
+        return max(min_val, min(val, max_val));
+    };
+
+    for (int k = 0; k < p.N; k++) {
+        double v = clamp(v_seq(k), p.v_min, p.v_max);
+        double w = clamp(w_seq(k), p.w_min, p.w_max);
         x(0) += p.dt * v * cos(x(2));
         x(1) += p.dt * v * sin(x(2));
-        x(2) = normalize_angle(x(2) + p.dt*w);
-        traj.row(k+1) = x.transpose();
+        x(2) = normalize_angle(x(2) + p.dt * w);
+        traj.row(k + 1) = x.transpose();
     }
     return traj;
 }
 
-VectorXd Controller::warm_start() {
+VectorXd Controller::warm_start(const VectorXd& x, const VectorXd& x_ref) {
+    if (u_prev_seq.isZero(1e-9)) {
+        double dx = x_ref(0) - x(0);
+        double dy = x_ref(1) - x(1);
+        double dist = sqrt(dx * dx + dy * dy);
+
+        double v_guess = max(p.v_min, min(dist / (p.N * p.dt), p.v_max));
+        VectorXd v_ws = VectorXd::Constant(p.N, v_guess);
+        VectorXd w_ws = VectorXd::Zero(p.N);
+
+        VectorXd u_ws(2 * p.N);
+        u_ws << v_ws, w_ws;
+        return u_ws;
+    }
+
     VectorXd v_seq = u_prev_seq.head(p.N);
     VectorXd w_seq = u_prev_seq.tail(p.N);
     VectorXd v_ws(p.N), w_ws(p.N);
-    v_ws.head(p.N-1) = v_seq.tail(p.N-1);
-    v_ws(p.N-1) = v_seq(p.N-1);
-    w_ws.head(p.N-1) = w_seq.tail(p.N-1);
-    w_ws(p.N-1) = w_seq(p.N-1);
-    VectorXd u_ws(2*p.N);
+
+    v_ws.head(p.N - 1) = v_seq.tail(p.N - 1);
+    v_ws(p.N - 1)      = v_seq(p.N - 1);
+    w_ws.head(p.N - 1) = w_seq.tail(p.N - 1);
+    w_ws(p.N - 1)      = w_seq(p.N - 1);
+
+    VectorXd u_ws(2 * p.N);
     u_ws << v_ws, w_ws;
     return u_ws;
 }
 
 double Controller::normalize_angle(double th) {
-    while(th > M_PI) th -= 2*M_PI;
-    while(th < -M_PI) th += 2*M_PI;
+    while (th > M_PI) th -= 2 * M_PI;
+    while (th < -M_PI) th += 2 * M_PI;
     return th;
 }
 
@@ -96,24 +114,24 @@ double Controller::objective_wrapper(const vector<double>& u, vector<double>& gr
 
     // Stage costs
     VectorXd pos_err2(traj.rows());
-    for (int k=0;k<traj.rows();k++)
-        pos_err2(k) = pow(traj(k,0)-d->x_target(0),2) + pow(traj(k,1)-d->x_target(1),2);
+    for (int k = 0; k < traj.rows(); k++)
+        pos_err2(k) = pow(traj(k, 0) - d->x_target(0), 2) + pow(traj(k, 1) - d->x_target(1), 2);
 
     VectorXd e_th2(traj.rows());
-    for (int k=0;k<traj.rows();k++)
-        e_th2(k) = pow(d->mpc->normalize_angle(traj(k,2)-d->x_target(2)),2);
+    for (int k = 0; k < traj.rows(); k++)
+        e_th2(k) = pow(d->mpc->normalize_angle(traj(k, 2) - d->x_target(2)), 2);
 
     VectorXd dv = v_seq;
-    dv.tail(dv.size()-1) -= v_seq.head(dv.size()-1);
+    dv.tail(dv.size() - 1) -= v_seq.head(dv.size() - 1);
     dv(0) = 0.0;
     VectorXd dw = w_seq;
-    dw.tail(dw.size()-1) -= w_seq.head(dw.size()-1);
+    dw.tail(dw.size() - 1) -= w_seq.head(dw.size() - 1);
     dw(0) = 0.0;
 
     double J_stage = 0.0;
-    for (int k=0;k<d->mpc->p.N;k++) {
+    for (int k = 0; k < d->mpc->p.N; k++) {
         J_stage += d->mpc->p.q_xy * pos_err2(k) + d->mpc->p.q_th * e_th2(k)
-                 + d->mpc->p.r_v * pow(v_seq(k),2) + d->mpc->p.r_w * pow(w_seq(k),2)
+                 + d->mpc->p.r_v * pow(v_seq(k), 2) + d->mpc->p.r_w * pow(w_seq(k), 2)
                  + d->mpc->p.s_v * abs(dv(k)) + d->mpc->p.s_w * abs(dw(k));
     }
 
