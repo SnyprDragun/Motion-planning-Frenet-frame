@@ -1,4 +1,4 @@
-#!/Users/subhodeep/venv/bin/python
+#!/Users/subhodeep/venv/bin/python3
 import time
 import numpy as np
 from tqdm import tqdm

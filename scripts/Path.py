@@ -1,4 +1,4 @@
-#!/Users/subhodeep/venv/bin/python
+#!/Users/subhodeep/venv/bin/python3
 '''class to generate path points for motion'''
 import numpy as np
 

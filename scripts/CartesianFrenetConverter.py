@@ -1,4 +1,4 @@
-#!/Users/subhodeep/venv/bin/python
+#!/Users/subhodeep/venv/bin/python3
 '''class for conversions'''
 import numpy as np
 

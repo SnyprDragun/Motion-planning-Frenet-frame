@@ -1,4 +1,4 @@
-#!/Users/subhodeep/venv/bin/python
+#!/Users/subhodeep/venv/bin/python3
 '''class to simulate dynamics of chosen robot'''
 import numpy as np
 from tabulate import tabulate

@@ -1,4 +1,4 @@
-#!/Users/subhodeep/venv/bin/python
+#!/Users/subhodeep/venv/bin/python3
 '''classes for MPC'''
 import numpy as np
 from dataclasses import dataclass
