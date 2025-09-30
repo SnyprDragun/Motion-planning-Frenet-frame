@@ -13,9 +13,9 @@
 #include <vector>
 #include <ostream>
 
-#include "matplotlibcpp.h"
 #include "Path.hpp"
 #include "Controller.hpp"
+#include "matplotlibcpp.h"
 #include "RobotDynamics.hpp"
 
 using namespace std;

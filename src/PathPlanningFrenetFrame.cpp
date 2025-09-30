@@ -13,14 +13,9 @@ ostream& operator<<(ostream& os, const PathPoint& pt) {
 
 PathPlanningFrenetFrame::PathPlanningFrenetFrame(RobotDynamics& robot, Path& target_path, Controller& controller, float T, float dt
 ) : robot(robot), target_path(target_path), controller(controller), T(T), dt(dt), current_states(), target_states(), 
-control_actions(), hitches(), trailers(), current_states_frenet(), target_states_frenet(), control_actions_frenet()
-{
-    // Constructor body (empty because everything is initialized in the initializer list)
-}
+control_actions(), hitches(), trailers(), current_states_frenet(), target_states_frenet(), control_actions_frenet() {}
 
-PathPlanningFrenetFrame::~PathPlanningFrenetFrame(){
-
-}
+PathPlanningFrenetFrame::~PathPlanningFrenetFrame(){}
 
 void PathPlanningFrenetFrame::store_hitch_trailer() {
     vector<vector<float>> hitches_step;
@@ -92,54 +87,49 @@ void PathPlanningFrenetFrame::diagnostics() {
 
 void PathPlanningFrenetFrame::plot(int interval_ms) {
     int n_frames = static_cast<int>(T / dt);
-    std::vector<double> t(n_frames);
-    for (int i = 0; i < n_frames; ++i) t[i] = i * dt;
 
-    // ---- Trajectory ----
-    std::vector<double> target_x, target_y;
+    vector<double> target_x, target_y;
     for (auto& state : target_states) {
         target_x.push_back(state.x);
         target_y.push_back(state.y);
     }
 
     plt::figure_size(1200, 600);
-    plt::subplot(2, 2, 1);  // Trajectory plot
-    plt::plot(target_x, target_y, "k--");
 
-    // ---- Animation loop ----
     for (int frame = 0; frame < n_frames; ++frame) {
-        std::vector<double> current_x, current_y;
+        vector<double> current_x, current_y;
         for (int i = 0; i <= frame; ++i) {
             current_x.push_back(current_states[i].x);
             current_y.push_back(current_states[i].y);
         }
 
-        // Clear previous data
         plt::clf();
-
-        // Plot target
-        plt::plot(target_x, target_y, "k--");
-
-        // Plot current trajectory
-        plt::plot(current_x, current_y, "r-");
-
-        // Plot mule
+        plt::plot(target_x, target_y, "k--"); 
+        plt::plot(current_x, current_y, "r-"); 
         plt::plot({current_states[frame].x}, {current_states[frame].y}, "ro");
 
-        // Plot hitch & trailer positions
         int n_pairs = hitches[0].size();
-        for (int i = 0; i < n_pairs; ++i) {
-            plt::plot({hitches[frame][i][0]}, {hitches[frame][i][1]}, "bo");
-            plt::plot({trailers[frame][i][0]}, {trailers[frame][i][1]}, "go");
+        vector<double> link_x = {current_states[frame].x};
+        vector<double> link_y = {current_states[frame].y};
 
-            // Draw links
-            std::vector<double> link_x = {current_states[frame].x, hitches[frame][i][0], trailers[frame][i][0]};
-            std::vector<double> link_y = {current_states[frame].y, hitches[frame][i][1], trailers[frame][i][1]};
-            plt::plot(link_x, link_y, "k-");
+        for (int i = 0; i < n_pairs; ++i) {
+            double hx = hitches[frame][i][0];
+            double hy = hitches[frame][i][1];
+            double tx = trailers[frame][i][0];
+            double ty = trailers[frame][i][1];
+
+            plt::plot({hx}, {hy}, "bo");
+            plt::plot({tx}, {ty}, "go");
+
+            link_x.push_back(hx);
+            link_y.push_back(hy);
+            link_x.push_back(tx);
+            link_y.push_back(ty);
         }
 
-        plt::xlim(-10, 10); // optional adjust limits
-        plt::ylim(-10, 10);
+        plt::plot(link_x, link_y, "k-");
+        plt::xlim(-12, 12);
+        plt::ylim(-12, 12);
         plt::pause(interval_ms / 1000.0);
     }
 

@@ -3,6 +3,9 @@
         "locale": "cpp",
         "vector": "cpp",
         "iostream": "cpp",
-        "dense": "cpp"
+        "dense": "cpp",
+        "string": "cpp",
+        "cstdint": "cpp",
+        "functional": "cpp"
     }
 }
