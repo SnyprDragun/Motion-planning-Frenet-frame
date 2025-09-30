@@ -39,7 +39,7 @@ int main() {
     MPCParams params(0.1, 20);   // dt=0.1, N=20
     Controller mpc(params);
 
-    PathPlanningFrenetFrame trajectory(robot, target_path, mpc, 10.0, 0.1);
+    PathPlanningFrenetFrame trajectory(robot, target_path, mpc, 63, 0.1);
     trajectory.control_loop();
     trajectory.diagnostics();
     robot.diagnostics();
