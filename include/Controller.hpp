@@ -22,7 +22,7 @@ using namespace Eigen;
 
 struct MPCParams {
     double dt = 0.1;                /*        sampling time [s]         */    
-    int N = 15;                     /*        prediction horizon        */
+    int N = 20;                     /*        prediction horizon        */
 
     /* control limits */
     double v_min = -0.8;            /*    min linear velocity [m/s]     */

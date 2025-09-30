@@ -46,7 +46,6 @@ vector<float> Controller::control(const PathPoint& x_now, const PathPoint& x_tar
     };
     float v_cmd = clamp(u_prev_seq(0), p.v_min, p.v_max);
     float w_cmd = clamp(u_prev_seq(p.N), p.w_min, p.w_max);
-    cout << "Control commands: v = " << v_cmd << ", w = " << w_cmd << endl;
     return {v_cmd, w_cmd};
 }
 

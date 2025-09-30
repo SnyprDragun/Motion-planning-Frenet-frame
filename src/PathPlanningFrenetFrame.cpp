@@ -91,59 +91,59 @@ void PathPlanningFrenetFrame::diagnostics() {
 }
 
 void PathPlanningFrenetFrame::plot(int interval_ms) {
-    // int n_frames = static_cast<int>(T / dt);
-    // std::vector<double> t(n_frames);
-    // for (int i = 0; i < n_frames; ++i) t[i] = i * dt;
+    int n_frames = static_cast<int>(T / dt);
+    std::vector<double> t(n_frames);
+    for (int i = 0; i < n_frames; ++i) t[i] = i * dt;
 
-    // // ---- Trajectory ----
-    // std::vector<double> target_x, target_y;
-    // for (auto& state : target_states) {
-    //     target_x.push_back(state[0]);
-    //     target_y.push_back(state[1]);
-    // }
+    // ---- Trajectory ----
+    std::vector<double> target_x, target_y;
+    for (auto& state : target_states) {
+        target_x.push_back(state.x);
+        target_y.push_back(state.y);
+    }
 
-    // plt::figure_size(1200, 600);
-    // plt::subplot(2, 2, 1);  // Trajectory plot
-    // plt::plot(target_x, target_y, "k--");
+    plt::figure_size(1200, 600);
+    plt::subplot(2, 2, 1);  // Trajectory plot
+    plt::plot(target_x, target_y, "k--");
 
-    // // ---- Animation loop ----
-    // for (int frame = 0; frame < n_frames; ++frame) {
-    //     std::vector<double> current_x, current_y;
-    //     for (int i = 0; i <= frame; ++i) {
-    //         current_x.push_back(current_states[i][0]);
-    //         current_y.push_back(current_states[i][1]);
-    //     }
+    // ---- Animation loop ----
+    for (int frame = 0; frame < n_frames; ++frame) {
+        std::vector<double> current_x, current_y;
+        for (int i = 0; i <= frame; ++i) {
+            current_x.push_back(current_states[i].x);
+            current_y.push_back(current_states[i].y);
+        }
 
-    //     // Clear previous data
-    //     plt::clf();
+        // Clear previous data
+        plt::clf();
 
-    //     // Plot target
-    //     plt::plot(target_x, target_y, "k--");
+        // Plot target
+        plt::plot(target_x, target_y, "k--");
 
-    //     // Plot current trajectory
-    //     plt::plot(current_x, current_y, "r-");
+        // Plot current trajectory
+        plt::plot(current_x, current_y, "r-");
 
-    //     // Plot mule
-    //     plt::plot({current_states[frame][0]}, {current_states[frame][1]}, "ro");
+        // Plot mule
+        plt::plot({current_states[frame].x}, {current_states[frame].y}, "ro");
 
-    //     // Plot hitch & trailer positions
-    //     int n_pairs = hitches[0].size();
-    //     for (int i = 0; i < n_pairs; ++i) {
-    //         plt::plot({hitches[frame][i][0]}, {hitches[frame][i][1]}, "bo");
-    //         plt::plot({trailers[frame][i][0]}, {trailers[frame][i][1]}, "go");
+        // Plot hitch & trailer positions
+        int n_pairs = hitches[0].size();
+        for (int i = 0; i < n_pairs; ++i) {
+            plt::plot({hitches[frame][i][0]}, {hitches[frame][i][1]}, "bo");
+            plt::plot({trailers[frame][i][0]}, {trailers[frame][i][1]}, "go");
 
-    //         // Draw links
-    //         std::vector<double> link_x = {current_states[frame][0], hitches[frame][i][0], trailers[frame][i][0]};
-    //         std::vector<double> link_y = {current_states[frame][1], hitches[frame][i][1], trailers[frame][i][1]};
-    //         plt::plot(link_x, link_y, "k-");
-    //     }
+            // Draw links
+            std::vector<double> link_x = {current_states[frame].x, hitches[frame][i][0], trailers[frame][i][0]};
+            std::vector<double> link_y = {current_states[frame].y, hitches[frame][i][1], trailers[frame][i][1]};
+            plt::plot(link_x, link_y, "k-");
+        }
 
-    //     plt::xlim(-10, 10); // optional adjust limits
-    //     plt::ylim(-10, 10);
-    //     plt::pause(interval_ms / 1000.0);
-    // }
+        plt::xlim(-10, 10); // optional adjust limits
+        plt::ylim(-10, 10);
+        plt::pause(interval_ms / 1000.0);
+    }
 
-    // plt::show();
+    plt::show();
 }
 
 void PathPlanningFrenetFrame::display_time(float start, float end) {

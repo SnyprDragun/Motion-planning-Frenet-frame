@@ -12,14 +12,14 @@
 #include <chrono>
 #include <vector>
 #include <ostream>
-// #include <matplotlibcpp.h>
 
+#include "matplotlibcpp.h"
 #include "Path.hpp"
 #include "Controller.hpp"
 #include "RobotDynamics.hpp"
 
 using namespace std;
-// using namespace plt = matplotlibcpp;
+namespace plt = matplotlibcpp;
 
 class PathPlanningFrenetFrame {
     private:
